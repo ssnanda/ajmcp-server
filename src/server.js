@@ -5,6 +5,7 @@ import { Limiter } from './limits.js';
 import { generateReply, InputError } from './provider.js';
 import { runAgent, installedToolVersions } from './agents.js';
 import { handleMcp } from './mcp.js';
+import { APP_VERSION } from './version.js';
 
 function json(res, status, data, requestId) {
   if (res.headersSent) return;
@@ -62,7 +63,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
       // Health probes reach the pod using its internal IP/Host, not the public OpenShift Route.
       // No secrets or tenant information are exposed by these probe endpoints.
       if (req.method === 'GET' && path === '/health/live') {
-        status = 200; return json(res, status, { status: 'live', version: '0.1.0' }, id);
+        status = 200; return json(res, status, { status: 'live', version: APP_VERSION }, id);
       }
       if (req.method === 'GET' && path === '/health/ready') {
         status = 200; return json(res, status, { status: 'ready' }, id);
@@ -80,7 +81,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
       if (req.method === 'GET' && path === '/v1/capabilities') {
         status = 200;
         return json(res, status, {
-          version: '0.1.0', id: identity.id,
+          version: APP_VERSION, id: identity.id,
           kind: identity.kind, provider: identity.kind === 'site' ? identity.site.provider : null,
           endpoints: ['/v1/chat', '/v1/ajcore/reply', '/mcp'],
           agentsEnabled: identity.kind === 'admin' && config.enableAgentJobs

@@ -1,4 +1,4 @@
-# AJMCP Server · v0.1.0
+# AJMCP Server · v0.1.1
 
 A single-container, OpenShift-ready, multi-tenant AI gateway and standards-based **Model Context Protocol** server for AJ WordPress sites. Includes separately versioned **OpenAI Codex CLI** and **Claude Code CLI**.
 
@@ -44,3 +44,6 @@ See [deploy/README.md](deploy/README.md), [deploy/openshift.yaml](deploy/openshi
 **AJCore integration is not yet end-to-end.** AJCore currently stores/serves chats through its own API and AJOps WebSocket service. The next phase is a WordPress-side AJMCP connector that forwards new visitor messages to `/v1/ajcore/reply`, sends responses to AJCore's existing `/ops/chat/sessions/{id}/auto-reply` endpoint, and respects human takeover/automation mute flags, deduplication and site identity. Neither AJCore nor AJOps has been modified by this server repository.
 
 **Production recommendation:** use provider API keys for customer-facing chat. CLI jobs are opt-in and administrative only; this project does not circumvent subscription terms or share personal ChatGPT/Claude sessions with website visitors.
+## Clone and deploy on OpenShift (AJ Ops-style)
+
+Run `cp deploy/oc-deploy.env.example .env.local`, create a private `sites.json` from `examples/sites.example.json`, set the provider credentials and project, `oc login`, then `./bin/oc-deploy.sh`. The new script builds in OpenShift and deploys `https://ajmcp.ncllcagents.com` via cert-manager's existing `letsencrypt-ncllc` ClusterIssuer. See [deploy/README.md](deploy/README.md) for DNS, TLS, versioning and secret setup.

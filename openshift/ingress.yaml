@@ -1,0 +1,25 @@
+# OpenShift's openshift-default Ingress controller generates a Route.
+# cert-manager renews the HTTPS certificate using AJ Ops' existing ClusterIssuer.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ajmcp-server
+  labels: { app: ajmcp-server }
+  annotations:
+    cert-manager.io/cluster-issuer: "AJMCP_ISSUER_PLACEHOLDER"
+    route.openshift.io/termination: edge
+spec:
+  ingressClassName: openshift-default
+  tls:
+    - hosts: [ AJMCP_HOST_PLACEHOLDER ]
+      secretName: ajmcp-tls
+  rules:
+    - host: AJMCP_HOST_PLACEHOLDER
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ajmcp-server
+                port: { name: http }

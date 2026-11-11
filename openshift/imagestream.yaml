@@ -1,0 +1,7 @@
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: ajmcp-server
+  labels: { app: ajmcp-server }
+spec:
+  lookupPolicy: { local: true }

@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ajmcp-config
+  labels: { app: ajmcp-server }
+data:
+  HOST: "0.0.0.0"
+  PORT: "3000"
+  ALLOWED_HOSTS: "AJMCP_HOST_PLACEHOLDER"
+  ALLOWED_ORIGINS: ""
+  SITES_CONFIG_FILE: "/run/secrets/ajmcp/sites.json"
+  HOME: "/tmp/ajmcp"
+  AGENT_WORKSPACE: "/workspace"
+  ENABLE_AGENT_JOBS: "false"

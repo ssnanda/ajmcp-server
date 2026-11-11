@@ -1,0 +1,21 @@
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: ajmcp-server
+  labels: { app: ajmcp-server }
+spec:
+  successfulBuildsHistoryLimit: 3
+  failedBuildsHistoryLimit: 3
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Containerfile
+      noCache: true
+      buildArgs:
+        - { name: CODEX_VERSION, value: "0.167.1" }
+        - { name: CLAUDE_VERSION, value: "2.1.322" }
+  output:
+    to: { kind: ImageStreamTag, name: "ajmcp-server:latest" }

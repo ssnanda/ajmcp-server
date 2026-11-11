@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ajmcp-server
+  labels: { app: ajmcp-server }
+spec:
+  selector: { app: ajmcp-server }
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
