@@ -16,7 +16,7 @@ Defaults: package.json version, interactive bump when Git dirty, keep existing
 OpenShift secrets, build in cluster, deploy an immutable image digest.
   --skip-bump     Skip version/commit/push prompt for uncommitted files
   --sync-secrets  Explicitly overwrite ajmcp-secrets using local private files
-  --reset-admin   Generate a new admin password for the web admin and show it once
+  --reset-admin   Generate a new admin user + password for the web admin and show them once
 First run: just run it. It creates the web admin login and prints it once (save it).
 Sites, AI keys and the admin password are then managed at https://<host>/admin.
 USAGE
@@ -60,9 +60,8 @@ ensure_admin_login() {
     ADMIN_USER_NAME="$(unb64 "$user_b64")"
     return 0
   fi
-  ADMIN_USER_NAME="${ADMIN_USER:-}"
-  [[ -z "$ADMIN_USER_NAME" && -n "$user_b64" ]] && ADMIN_USER_NAME="$(unb64 "$user_b64")"
-  ADMIN_USER_NAME="${ADMIN_USER_NAME:-admin}"
+  # Not "admin": fully random (48 bits), unless ADMIN_USER is set in the environment or .env.local.
+  ADMIN_USER_NAME="${ADMIN_USER:-u-$(node -p "require('crypto').randomBytes(6).toString('hex')")}"
   password="$(node --input-type=module -e 'import { generatePassword } from "./src/password.js"; console.log(generatePassword())')"
   hash="$(AJMCP_PW="$password" node --input-type=module -e 'import { hashPassword } from "./src/password.js"; console.log(await hashPassword(process.env.AJMCP_PW))')"
   [[ -n "$password" && -n "$hash" ]] || { echo "ERROR: Could not create the admin login." >&2; exit 1; }
