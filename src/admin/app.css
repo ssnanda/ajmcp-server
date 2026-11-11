@@ -42,3 +42,5 @@ button:disabled { opacity: .5; cursor: default; }
 .empty { color: var(--muted); padding: 4px 0; }
 .mt { margin-top: 8px; }
 .actions.end { align-items: end; }
+.cli { padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--line); }
+.cli:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }

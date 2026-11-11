@@ -1,3 +1,5 @@
+import { isCliProvider, runCli, CliError } from './cli.js';
+
 export class InputError extends Error {
   constructor(message, status = 400) { super(message); this.name = 'InputError'; this.status = status; }
 }
@@ -45,6 +47,13 @@ async function fetchModel(fetchFn, url, options, timeoutMs) {
 export async function generateReply(site, messages, config, fetchFn = fetch) {
   const validated = validateMessages(messages, config);
   const provider = site.provider;
+  if (isCliProvider(provider)) {
+    try { return await runCli(site, validated, config); }
+    catch (error) {
+      if (error instanceof CliError) throw new ProviderError(error.code, error.status);
+      throw error;
+    }
+  }
   const model = site.model || (provider === 'openai' ? config.openaiModel : config.anthropicModel);
   if (!model || /^SET_SUPPORTED/.test(model)) throw new ProviderError('model_not_configured', 503);
 

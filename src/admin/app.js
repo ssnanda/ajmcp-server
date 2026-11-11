@@ -1,6 +1,9 @@
 'use strict';
 const app = document.getElementById('app');
 let state = null;
+let cli = null;             // installed CLI versions + login state
+const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)']];
+const isCli = (p) => p.endsWith('-cli');
 let notice = null;           // { kind: 'err'|'ok', text, secret? }
 const models = {};           // provider -> [ids]
 const open = new Set();      // expanded site ids
@@ -37,7 +40,10 @@ async function run(fn, okText) {
   finally { if (state) render(); }
 }
 
-async function refresh() { state = await api('/state'); }
+async function refresh() {
+  state = await api('/state');
+  try { cli = await api('/cli'); } catch { cli = null; }
+}
 
 function copyButton(text) {
   const b = h('button', { type: 'button' }, 'Copy');
@@ -66,7 +72,7 @@ function renderLogin(message) {
 
 /* ---------- sites ---------- */
 async function loadModels(provider, datalist) {
-  if (!state.keys[provider].set) return;
+  if (isCli(provider) || !state.keys[provider].set) { datalist.replaceChildren(); return; }
   if (!models[provider]) {
     try { models[provider] = (await api('/models?provider=' + provider)).models; } catch { models[provider] = []; }
   }
@@ -74,9 +80,9 @@ async function loadModels(provider, datalist) {
 }
 
 function siteCard(site) {
-  const provider = h('select', null, ...['openai', 'anthropic'].map((p) => h('option', { value: p, selected: p === site.provider }, p)));
+  const provider = h('select', null, ...PROVIDERS.map(([p, label]) => h('option', { value: p, selected: p === site.provider }, label)));
   const list = h('datalist', { id: 'models-' + site.id });
-  const model = h('input', { value: site.model, list: 'models-' + site.id, placeholder: 'model id' });
+  const model = h('input', { value: site.model, list: 'models-' + site.id, placeholder: isCli(site.provider) ? 'model id (optional)' : 'model id' });
   const prompt = h('textarea', null, site.systemPrompt);
   prompt.value = site.systemPrompt;
   const refreshList = () => loadModels(provider.value, list);
@@ -88,7 +94,7 @@ function siteCard(site) {
     h('summary', null,
       h('span', { class: 'name' }, site.id),
       h('span', { class: 'pill ' + (site.disabled ? 'off' : 'on') }, site.disabled ? 'disabled' : 'active'),
-      h('span', { class: 'meta' }, `${site.provider} · ${site.model || 'no model'} · token …${site.tokenHint || '????'}`),
+      h('span', { class: 'meta' }, `${site.provider} · ${site.model || (isCli(site.provider) ? 'CLI default' : 'no model')} · token …${site.tokenHint || '????'}`),
       h('span', { class: 'meta' }, s.requests ? `${s.requests} req · ${s.errors} err` + (s.lastErrorCode ? ` · last: ${s.lastErrorCode}` : '') : 'no requests yet')),
     h('div', { class: 'body' },
       h('div', { class: 'row' }, field('Provider', provider), field('Model', model), list),
@@ -116,7 +122,7 @@ function siteCard(site) {
 
 function addSiteForm() {
   const id = h('input', { placeholder: 'site-id', pattern: '[a-z0-9][a-z0-9_\\-]{1,63}', required: true });
-  const provider = h('select', null, h('option', { value: 'anthropic' }, 'anthropic'), h('option', { value: 'openai' }, 'openai'));
+  const provider = h('select', null, ...PROVIDERS.map(([p, label]) => h('option', { value: p }, label)));
   const list = h('datalist', { id: 'models-new' });
   const model = h('input', { placeholder: 'model id', list: 'models-new' });
   const refreshList = () => loadModels(provider.value, list);
@@ -135,6 +141,30 @@ function addSiteForm() {
     h('div', { class: 'row' }, field('Site id', id), field('Provider', provider), field('Model', model), list),
     h('div', null, prompt),
     h('div', { class: 'actions mt' }, h('button', { class: 'primary', type: 'submit', disabled: !state.storage || null }, 'Add site')));
+}
+
+/* ---------- subscription CLIs ---------- */
+function cliRow(name, label, how, field, build) {
+  const info = cli && cli[name];
+  const input = h(field === 'claudeToken' ? 'input' : 'textarea', field === 'claudeToken'
+    ? { type: 'password', autocomplete: 'off', placeholder: 'Paste token' } : { placeholder: 'Paste auth.json' });
+  const status = !info ? h('span', { class: 'pill bad' }, 'unavailable')
+    : !info.version ? h('span', { class: 'pill bad' }, 'not installed')
+    : h('span', { class: 'pill ' + (info.loggedIn ? 'on' : 'off') }, `${info.version} · ${info.loggedIn ? 'logged in' : 'not logged in'}`);
+  return h('div', { class: 'cli' },
+    h('div', null, h('label', null, label + ' ', status)),
+    h('div', { class: 'meta' }, how),
+    h('div', { class: 'row' }, input),
+    h('div', { class: 'actions' },
+      h('button', { type: 'button', onclick: () => {
+        if (!input.value.trim()) { notice = { kind: 'err', text: 'paste the login first' }; render(); return; }
+        run(async () => { cli = await api('/cli', 'PUT', { [field]: input.value.trim() }); }, label + ' login saved');
+      } }, 'Save login'),
+      h('button', { type: 'button', onclick: () => run(async () => {
+        const r = await api('/cli/' + name + '/test', 'POST');
+        notice = r.ok ? { kind: 'ok', text: `${label}: replied “${r.reply}”` } : { kind: 'err', text: `${label}: test failed — ${words(r.error)}${r.detail ? ' — ' + r.detail : ''}` };
+      }) }, 'Test'),
+      field === 'claudeToken' && info && info.tokenSet ? h('button', { class: 'danger', type: 'button', onclick: () => run(async () => { cli = await api('/cli', 'PUT', { claudeToken: null }); }, 'Claude token removed') }, 'Remove') : null));
 }
 
 /* ---------- keys / password ---------- */
@@ -165,7 +195,7 @@ function passwordForm() {
 /* ---------- main ---------- */
 function render() {
   const base = location.origin;
-  app.replaceChildren(
+  app.replaceChildren(...[
     h('header', { class: 'top' },
       h('h1', null, 'AJMCP Admin'), h('span', { class: 'who' }, `v${state.version} · ${state.user}`),
       h('button', { type: 'button', onclick: async () => { try { await api('/logout', 'POST'); } catch { /* already out */ } state = null; renderLogin(); } }, 'Sign out')),
@@ -174,8 +204,11 @@ function render() {
     h('section', { class: 'card' }, h('h2', null, h('span', { class: 'grow' }, 'Sites'), h('span', { class: 'pill' }, base)),
       state.sites.length ? state.sites.map(siteCard) : h('div', { class: 'empty' }, 'No sites yet.')),
     h('section', { class: 'card' }, h('h2', null, 'Add site'), addSiteForm()),
+    h('section', { class: 'card' }, h('h2', null, 'Subscription logins (CLI)'),
+      cliRow('claude', 'Claude', 'On your Mac run: claude setup-token', 'claudeToken'),
+      cliRow('codex', 'ChatGPT (Codex)', 'On your Mac run: codex login, then paste ~/.codex/auth.json', 'codexAuth')),
     h('section', { class: 'card' }, h('h2', null, 'AI provider keys'), keyRow('anthropic', 'Anthropic'), keyRow('openai', 'OpenAI')),
-    h('section', { class: 'card' }, h('h2', null, 'Admin password'), passwordForm()));
+    h('section', { class: 'card' }, h('h2', null, 'Admin password'), passwordForm())].filter(Boolean));
 }
 
 (async () => {

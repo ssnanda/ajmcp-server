@@ -32,3 +32,7 @@ Check `oc get certificate ajmcp-tls -n ajmcp`, `oc get routes -n ajmcp`, and `ht
 ## Secrets and safety
 
 The script uploads only Containerfile, package.json, tool-versions.json and src/ for its binary build. It never sends your private .env.local, sites.json, Git history, credentials or workspace. Site tokens and provider keys stay in ajmcp-secrets, not Git or ConfigMaps. Admin-only CLI jobs remain disabled by default. Automatic rollback restores the prior Deployment revision if a subsequent rollout fails; first installs have no prior revision. Single-node OpenShift does not provide node-level HA.
+
+## Subscription logins (Claude / ChatGPT)
+
+The image contains the Claude Code and Codex CLIs. In `/admin` > Subscription logins, paste the token from `claude setup-token` and the `~/.codex/auth.json` from `codex login` (both made on your Mac). They are stored on the data volume and survive redeploys. A site then uses them by choosing provider "Claude subscription (CLI)" or "ChatGPT subscription (Codex CLI)"; the WordPress connector needs no other change. Claude runs with no tools. Codex runs as a read-only agent, so prefer Claude for public-facing chat.

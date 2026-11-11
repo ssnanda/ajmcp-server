@@ -22,7 +22,7 @@ function parseSites(raw, allowEmpty = false) {
       throw new Error(`Site ${id} needs a unique random secret (32+ characters)`);
     }
     if (ids.has(id) || tokens.has(token)) throw new Error('Duplicate site id or token');
-    if (site.provider && !['openai', 'anthropic'].includes(site.provider)) throw new Error('Unknown site provider');
+    if (site.provider && !['openai', 'anthropic', 'claude-cli', 'codex-cli'].includes(site.provider)) throw new Error('Unknown site provider');
     ids.add(id); tokens.add(token);
     return Object.freeze({
       id, token, provider: site.provider || 'openai',
@@ -53,6 +53,7 @@ export function loadConfig(env = process.env, read = readFileSync) {
     dataDir, adminUser, adminPasswordHash,
     openaiApiKey: env.OPENAI_API_KEY || '',
     anthropicApiKey: env.ANTHROPIC_API_KEY || '',
+    claudeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN || '',
     openaiModel: env.OPENAI_MODEL || '',
     anthropicModel: env.ANTHROPIC_MODEL || '',
     allowedHosts: new Set((env.ALLOWED_HOSTS || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean)),
@@ -61,6 +62,7 @@ export function loadConfig(env = process.env, read = readFileSync) {
     maxMessages: boundedInt(env.MAX_MESSAGES, 20, 1, 100),
     maxMessageChars: boundedInt(env.MAX_MESSAGE_CHARS, 6000, 50, 50000),
     maxConcurrent: boundedInt(env.MAX_CONCURRENT, 6, 1, 100),
+    maxCliConcurrent: boundedInt(env.MAX_CLI_CONCURRENT, 2, 1, 8),
     rateLimitPerMinute: boundedInt(env.RATE_LIMIT_PER_MINUTE, 30, 1, 10000),
     providerTimeoutMs: boundedInt(env.PROVIDER_TIMEOUT_MS, 45000, 1000, 180000),
     agentTimeoutMs: boundedInt(env.AGENT_TIMEOUT_MS, 90000, 1000, 300000),

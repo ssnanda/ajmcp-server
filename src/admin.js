@@ -1,7 +1,8 @@
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { hashPassword, verifyPassword } from './password.js';
-import { StoreError, PROVIDERS } from './store.js';
+import { StoreError, KEY_PROVIDERS } from './store.js';
+import { CliError, cliStatus, runCli, saveCodexAuth } from './cli.js';
 import { generateReply, ProviderError, InputError } from './provider.js';
 import { APP_VERSION } from './version.js';
 
@@ -119,7 +120,7 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
   };
 
   async function listModels(provider) {
-    if (!PROVIDERS.includes(provider)) throw new AdminError('invalid_provider');
+    if (!KEY_PROVIDERS.includes(provider)) throw new AdminError('invalid_provider');
     const key = provider === 'openai' ? config.openaiApiKey : config.anthropicApiKey;
     if (!key) throw new AdminError('provider_not_configured', 409);
     const request = provider === 'openai'
@@ -165,6 +166,7 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
       return send(res, 200, { ok: true }, { 'Set-Cookie': cookie(req, '', 0) });
     }
     if (method === 'GET' && path === '/admin/api/state') return send(res, 200, stateView());
+    if (method === 'GET' && path === '/admin/api/cli') return send(res, 200, await cliStatus(config));
     if (method === 'GET' && path === '/admin/api/models') {
       const provider = new URL(req.url, 'http://localhost').searchParams.get('provider') || '';
       return send(res, 200, { models: await listModels(provider) });
@@ -199,13 +201,32 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
       }
     }
     if (method === 'PUT' && path === '/admin/api/keys') {
-      for (const provider of PROVIDERS) {
+      for (const provider of KEY_PROVIDERS) {
         if (!(provider in body)) continue;
         const value = body[provider];
         if (value !== null && typeof value !== 'string') throw new AdminError('invalid_api_key');
         store.setKey(provider, value);
       }
       return send(res, 200, stateView().keys);
+    }
+    if (method === 'PUT' && path === '/admin/api/cli') {
+      if ('claudeToken' in body) {
+        if (body.claudeToken !== null && typeof body.claudeToken !== 'string') throw new AdminError('invalid_api_key');
+        store.setKey('claude', body.claudeToken);
+      }
+      if ('codexAuth' in body) saveCodexAuth(config, body.codexAuth);
+      return send(res, 200, await cliStatus(config));
+    }
+    const cliTest = /^\/admin\/api\/cli\/(claude|codex)\/test$/.exec(path);
+    if (method === 'POST' && cliTest) {
+      const provider = `${cliTest[1]}-cli`;
+      try {
+        const reply = await runCli({ provider, model: '', systemPrompt: '' }, [{ role: 'user', content: 'Reply with the single word OK.' }], config, { debug: true });
+        return send(res, 200, { ok: true, reply: reply.text.slice(0, 80) });
+      } catch (error) {
+        if (error instanceof CliError) return send(res, 200, { ok: false, error: error.code, detail: error.detail });
+        throw error;
+      }
     }
     if (method === 'POST' && path === '/admin/api/password') {
       const { current, next } = body;
@@ -236,6 +257,8 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
     } catch (error) {
       if (error instanceof AdminError || error instanceof StoreError || error instanceof InputError) {
         send(res, error.status || 400, { error: error.code || error.message });
+      } else if (error instanceof CliError) {
+        send(res, error.status || 502, { error: error.code });
       } else if (error instanceof ProviderError) {
         send(res, error.status || 502, { error: error.code });
       } else {

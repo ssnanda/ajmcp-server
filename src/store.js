@@ -9,7 +9,8 @@ export class StoreError extends Error {
 
 const ID_RE = /^[a-z0-9][a-z0-9-_]{1,63}$/;
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
-export const PROVIDERS = ['openai', 'anthropic'];
+export const KEY_PROVIDERS = ['openai', 'anthropic'];
+export const PROVIDERS = [...KEY_PROVIDERS, 'claude-cli', 'codex-cli'];
 
 function cleanSite(input, existing = {}) {
   const provider = input.provider ?? existing.provider ?? 'openai';
@@ -44,7 +45,7 @@ export class SettingsStore {
   constructor(config) {
     this.config = config;
     this.file = config.dataDir ? join(config.dataDir, 'settings.json') : '';
-    this.env = { openai: config.openaiApiKey, anthropic: config.anthropicApiKey, passwordHash: config.adminPasswordHash };
+    this.env = { openai: config.openaiApiKey, anthropic: config.anthropicApiKey, claude: config.claudeOauthToken, passwordHash: config.adminPasswordHash };
     this.state = { sites: undefined, keys: {}, passwordHash: '', passwordBase: '' };
   }
 
@@ -57,7 +58,7 @@ export class SettingsStore {
     const data = JSON.parse(raw);
     this.state = {
       sites: Array.isArray(data.sites) ? data.sites.map(toStored) : undefined,
-      keys: { openai: String(data.keys?.openai || ''), anthropic: String(data.keys?.anthropic || '') },
+      keys: { openai: String(data.keys?.openai || ''), anthropic: String(data.keys?.anthropic || ''), claude: String(data.keys?.claude || '') },
       passwordHash: String(data.passwordHash || ''),
       passwordBase: String(data.passwordBase || '')
     };
@@ -69,6 +70,7 @@ export class SettingsStore {
     if (state.sites) config.sites = state.sites;
     config.openaiApiKey = state.keys.openai || env.openai;
     config.anthropicApiKey = state.keys.anthropic || env.anthropic;
+    config.claudeOauthToken = state.keys.claude || env.claude;
     // A password changed in the UI wins, unless the deploy script later issued a new one (--reset-admin).
     config.adminPasswordHash = state.passwordHash && state.passwordBase === env.passwordHash ? state.passwordHash : env.passwordHash;
   }
@@ -133,9 +135,9 @@ export class SettingsStore {
   }
 
   setKey(provider, value) {
-    if (!PROVIDERS.includes(provider)) throw new StoreError('invalid_provider');
+    if (![...KEY_PROVIDERS, 'claude'].includes(provider)) throw new StoreError('invalid_provider');
     const key = value === null ? '' : String(value).trim();
-    if (key && (key.length < 20 || key.length > 400 || /\s/.test(key))) throw new StoreError('invalid_api_key');
+    if (key && (key.length < 20 || key.length > 2000 || /\s/.test(key))) throw new StoreError('invalid_api_key');
     this.write({ ...this.state, sites: this.state.sites ?? this.sites(), keys: { ...this.state.keys, [provider]: key } });
   }
 
