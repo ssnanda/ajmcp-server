@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # AJMCP version bump, commit and optional push, matching AJ Ops' release style.
+# Commits made here end in "[skip ci]", so pushing them does not start any GitHub Actions workflow.
 set -euo pipefail
+SKIP_CI="[skip ci]"
+with_skip_ci() { case "$1" in *"$SKIP_CI"*) printf '%s' "$1" ;; *) printf '%s %s' "$1" "$SKIP_CI" ;; esac; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 if [[ "${1:-}" != "" && "${1:-}" != "--if-dirty" ]]; then
-  echo "Usage: ./bin/bump.sh [--if-dirty]" >&2; exit 2
+  echo "Usage: ./bin/2-bump-version.sh [--if-dirty]" >&2; exit 2
 fi
 if [[ ! -d .git ]]; then
   if [[ "${1:-}" == "--if-dirty" ]]; then echo "No Git checkout; no bump."; exit 0; fi
-  echo "ERROR: Clone with Git before using bump.sh" >&2; exit 1
+  echo "ERROR: Clone with Git before using 2-bump-version.sh" >&2; exit 1
 fi
 if [[ "${1:-}" == "--if-dirty" && -z "$(git status --porcelain)" ]]; then
   echo "Working tree clean; no bump."
@@ -49,10 +52,10 @@ fi
 if [[ -n "$(git status --porcelain)" ]]; then
   git add -A
   if [[ "$NEXT" != "$CURRENT" ]]; then
-    git commit -m "chore: bump AJMCP to v$NEXT"
+    git commit -m "$(with_skip_ci "chore: bump AJMCP to v$NEXT")"
   else
     read -r -p "Commit message [chore: update AJMCP]: " MESSAGE
-    git commit -m "${MESSAGE:-chore: update AJMCP}"
+    git commit -m "$(with_skip_ci "${MESSAGE:-chore: update AJMCP}")"
   fi
 else
   echo "Nothing to commit."

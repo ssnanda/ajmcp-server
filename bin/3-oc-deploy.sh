@@ -10,13 +10,13 @@ cd "$ROOT"
 usage() {
   cat <<'USAGE'
 AJMCP OpenShift deployment:
-  ./bin/oc-deploy.sh [version] [--skip-bump] [--sync-secrets]
+  ./bin/3-oc-deploy.sh [version] [--skip-bump] [--sync-secrets]
 
 Defaults: package.json version, interactive bump when Git dirty, keep existing
 OpenShift secrets, build in cluster, deploy an immutable image digest.
   --skip-bump     Skip version/commit/push prompt for uncommitted files
   --sync-secrets  Explicitly overwrite ajmcp-secrets using local private files
-First run: cp deploy/oc-deploy.env.example .env.local
+First run: just run it. It asks for an AI provider key and creates sites.json for you.
 USAGE
 }
 
@@ -36,19 +36,66 @@ for arg in "$@"; do
   esac
 done
 
+interactive() { [[ -t 0 && -t 1 ]]; }
+
+# Asks for the provider key(s) when none is set. Input is hidden and never written to disk by this script.
+ask_for_api_keys() {
+  if [[ -n "${OPENAI_API_KEY:-}" || -n "${ANTHROPIC_API_KEY:-}" ]]; then return 0; fi
+  if ! interactive; then return 0; fi
+  echo "First run: AJMCP needs at least one AI provider key (stored only in the cluster Secret)."
+  read -r -s -p "Anthropic API key (Enter to skip): " ANTHROPIC_API_KEY; echo
+  read -r -s -p "OpenAI API key (Enter to skip): " OPENAI_API_KEY; echo
+}
+
+# Creates sites.json (private, ignored by Git) with one site and a random token when it does not exist.
+ensure_sites_file() {
+  local file="$1"
+  [[ -f "$file" ]] && return 0
+  if ! interactive; then
+    echo "ERROR: Missing $file. Run this script from a terminal once to create it, or copy examples/sites.example.json." >&2
+    exit 1
+  fi
+  command -v openssl >/dev/null 2>&1 || { echo "ERROR: openssl is required to generate a site token." >&2; exit 1; }
+  local site_id provider model token default_provider default_model
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then default_provider="anthropic"; else default_provider="openai"; fi
+  echo ""
+  echo "Creating $file (one website that may call AJMCP; add more later by editing the file)."
+  read -r -p "Site id [ncllcagents]: " site_id; site_id="${site_id:-ncllcagents}"
+  read -r -p "Provider anthropic/openai [$default_provider]: " provider; provider="${provider:-$default_provider}"
+  [[ "$provider" == "anthropic" || "$provider" == "openai" ]] || { echo "ERROR: provider must be anthropic or openai" >&2; exit 1; }
+  default_model=""; [[ "$provider" == "anthropic" ]] && default_model="claude-sonnet-5-5"
+  if [[ -n "$default_model" ]]; then
+    read -r -p "Model id [$default_model]: " model; model="${model:-$default_model}"
+  else
+    read -r -p "Model id (a model your OpenAI account supports): " model
+  fi
+  [[ -n "$model" ]] || { echo "ERROR: a model id is required." >&2; exit 1; }
+  token="$(openssl rand -hex 32)"
+  SITE_ID="$site_id" SITE_PROVIDER="$provider" SITE_MODEL="$model" SITE_TOKEN="$token" node -e '
+    const fs = require("fs");
+    const example = JSON.parse(fs.readFileSync("examples/sites.example.json", "utf8"));
+    const systemPrompt = example.sites[0].systemPrompt;
+    fs.writeFileSync(process.argv[1], JSON.stringify({ sites: [{ id: process.env.SITE_ID, token: process.env.SITE_TOKEN, provider: process.env.SITE_PROVIDER, model: process.env.SITE_MODEL, systemPrompt }] }, null, 2) + "\n");
+  ' "$file"
+  chmod 600 "$file"
+  echo "Wrote $file. This site's token (put it in that WordPress site's AJMCP connector; it is also stored in $file):"
+  echo "  $token"
+  echo ""
+}
+
 for binary in oc node mktemp sed cp; do
   command -v "$binary" >/dev/null 2>&1 || { echo "ERROR: Missing $binary" >&2; exit 1; }
 done
-if [[ ! -f .env.local ]]; then
-  echo "ERROR: Copy deploy/oc-deploy.env.example to .env.local and configure it." >&2
-  exit 1
-fi
+# .env and .env.local are optional (as in AJ Ops). Everything has a default except the AI provider key,
+# which is asked for on the first run when it is not already set.
 set -a
-# shellcheck disable=SC1091
-source .env.local
+for env_file in .env .env.local; do
+  # shellcheck disable=SC1090
+  if [[ -f "$env_file" ]]; then source "$env_file"; fi
+done
 set +a
 if [[ "$SKIP_BUMP" == false && -z "$VERSION_OVERRIDE" ]]; then
-  "$SCRIPT_DIR/bump.sh" --if-dirty
+  "$SCRIPT_DIR/2-bump-version.sh" --if-dirty
 fi
 PACKAGE_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")"
 VERSION="${VERSION_OVERRIDE:-$PACKAGE_VERSION}"
@@ -57,12 +104,12 @@ if [[ "$VERSION" != "$PACKAGE_VERSION" ]]; then
   echo "WARNING: Image tag $VERSION differs from package.json version $PACKAGE_VERSION."
 fi
 
-PROJECT="${OPENSHIFT_PROJECT:-}"
+PROJECT="${OPENSHIFT_PROJECT:-ajmcp}"
 HOSTNAME="${AJMCP_HOST:-ajmcp.ncllcagents.com}"
 ISSUER="${CERT_MANAGER_CLUSTER_ISSUER:-letsencrypt-ncllc}"
 APP="ajmcp-server"
 REGISTRY="image-registry.openshift-image-registry.svc:5000"
-[[ "$PROJECT" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "ERROR: Set valid OPENSHIFT_PROJECT in .env.local" >&2; exit 1; }
+[[ "$PROJECT" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || { echo "ERROR: OPENSHIFT_PROJECT must be a valid project name (set it in .env.local or the environment)." >&2; exit 1; }
 [[ "$HOSTNAME" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ && "$HOSTNAME" == *.* && ${#HOSTNAME} -le 253 ]] || { echo "ERROR: Invalid AJMCP_HOST" >&2; exit 1; }
 [[ "$ISSUER" =~ ^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$ ]] || { echo "ERROR: Invalid issuer" >&2; exit 1; }
 CODEX_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('tool-versions.json','utf8')).codex")"
@@ -99,7 +146,10 @@ trap 'rm -rf "$TMP"' EXIT
 
 if [[ "$SYNC_SECRETS" == true ]] || ! oc get secret ajmcp-secrets -n "$PROJECT" >/dev/null 2>&1; then
   SITE_FILE="${AJMCP_SITES_FILE:-sites.json}"
-  [[ -f "$SITE_FILE" ]] || { echo "ERROR: Missing $SITE_FILE. Copy/edit examples/sites.example.json and use real site tokens/models." >&2; exit 1; }
+  OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+  ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+  ask_for_api_keys
+  ensure_sites_file "$SITE_FILE"
   node - "$SITE_FILE" <<'NODE'
 const fs = require('fs');
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
@@ -114,10 +164,8 @@ for (const site of config.sites) {
   if (!site.model || /^(SET_|REPLACE_)/.test(site.model)) throw new Error('Site '+site.id+' needs a supported model id');
 }
 NODE
-  OPENAI_API_KEY="${OPENAI_API_KEY:-}"
-  ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
   if [[ -z "$OPENAI_API_KEY" && -z "$ANTHROPIC_API_KEY" ]]; then
-    echo "ERROR: Set OPENAI_API_KEY or ANTHROPIC_API_KEY in .env.local" >&2
+    echo "ERROR: An AI provider key is required (OPENAI_API_KEY or ANTHROPIC_API_KEY, in the environment or .env.local)." >&2
     exit 1
   fi
   ADMIN_TOKEN="${ADMIN_TOKEN:-}"
