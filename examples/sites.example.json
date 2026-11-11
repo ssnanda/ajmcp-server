@@ -1,0 +1,18 @@
+{
+  "sites": [
+    {
+      "id": "ncllcagents",
+      "token": "REPLACE_WITH_RANDOM_32_BYTE_PLUS_SECRET",
+      "provider": "openai",
+      "model": "SET_SUPPORTED_OPENAI_MODEL_ID",
+      "systemPrompt": "You are a helpful AI assistant for this website. Only answer from verified business information provided to you. If unsure, suggest a human follow-up. Never invent policies, fees, guarantees, or legal advice."
+    },
+    {
+      "id": "another-wordpress-site",
+      "token": "REPLACE_WITH_A_DIFFERENT_RANDOM_SECRET",
+      "provider": "anthropic",
+      "model": "SET_SUPPORTED_ANTHROPIC_MODEL_ID",
+      "systemPrompt": "Answer questions about this business accurately. Escalate uncertain or sensitive matters to a human."
+    }
+  ]
+}

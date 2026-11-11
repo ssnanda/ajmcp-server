@@ -1,0 +1,47 @@
+name: Update one bundled AI CLI
+on:
+  workflow_dispatch:
+    inputs:
+      tool:
+        description: CLI to update independently
+        required: true
+        type: choice
+        options:
+          - codex
+          - claude
+      version:
+        description: Version (blank = latest published npm version)
+        required: false
+        type: string
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Update selected version only
+        env:
+          TOOL: ${{ inputs.tool }}
+          VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          if [ -n "$VERSION" ]; then
+            node scripts/update-tool-version.mjs --tool "$TOOL" --version "$VERSION"
+          else
+            node scripts/update-tool-version.mjs --tool "$TOOL"
+          fi
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "build: update ${{ inputs.tool }} CLI"
+          branch: "bot/update-${{ inputs.tool }}"
+          delete-branch: true
+          title: "Update ${{ inputs.tool }} CLI"
+          body: |
+            Updates only the selected CLI version in tool-versions.json.
+            CI validates application behavior. Rebuild/publish the image after merge.

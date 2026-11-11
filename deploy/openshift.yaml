@@ -1,0 +1,109 @@
+# Replace mcp.example.com and YOUR_REGISTRY/ajmcp-server:0.1.0 before deployment.
+# Create ajmcp-secrets first (see secret.example.yaml, never commit real credentials).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ajmcp-server
+  labels: { app: ajmcp-server }
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: ajmcp-server }
+  template:
+    metadata:
+      labels: { app: ajmcp-server }
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: ajmcp
+          image: YOUR_REGISTRY/ajmcp-server:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: HOST
+              value: 0.0.0.0
+            - name: PORT
+              value: "3000"
+            - name: ALLOWED_HOSTS
+              value: mcp.example.com
+            - name: SITES_CONFIG_FILE
+              value: /run/secrets/ajmcp/sites.json
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef: { name: ajmcp-secrets, key: openai-api-key }
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef: { name: ajmcp-secrets, key: anthropic-api-key }
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef: { name: ajmcp-secrets, key: admin-token }
+            - name: HOME
+              value: /tmp/ajmcp
+            - name: AGENT_WORKSPACE
+              value: /workspace
+            - name: ENABLE_AGENT_JOBS
+              value: "false"
+          volumeMounts:
+            - name: site-config
+              mountPath: /run/secrets/ajmcp
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: workspace
+              mountPath: /workspace
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+            seccompProfile: { type: RuntimeDefault }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: "2", memory: 2Gi }
+          livenessProbe:
+            httpGet: { path: /health/live, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /health/ready, port: http }
+            initialDelaySeconds: 3
+            periodSeconds: 10
+      volumes:
+        - name: site-config
+          secret:
+            secretName: ajmcp-secrets
+            items:
+              - key: sites.json
+                path: sites.json
+        - name: tmp
+          emptyDir: { sizeLimit: 512Mi }
+        - name: workspace
+          emptyDir: { sizeLimit: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ajmcp-server
+  labels: { app: ajmcp-server }
+spec:
+  selector: { app: ajmcp-server }
+  ports:
+    - port: 80
+      targetPort: http
+      name: http
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ajmcp-server
+spec:
+  host: mcp.example.com
+  to: { kind: Service, name: ajmcp-server }
+  port: { targetPort: http }
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
