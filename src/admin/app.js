@@ -4,6 +4,8 @@ let state = null;
 let cli = null;             // installed CLI versions + login state
 const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)']];
 const isCli = (p) => p.endsWith('-cli');
+const TABS = [['sites', 'Sites'], ['logins', 'Logins & keys'], ['account', 'Account']];
+let tab = TABS.some(([k]) => '#' + k === location.hash) ? location.hash.slice(1) : 'sites';
 let notice = null;           // { kind: 'err'|'ok', text, secret? }
 const models = {};           // provider -> [ids]
 const open = new Set();      // expanded site ids
@@ -90,11 +92,12 @@ function siteCard(site) {
   model.addEventListener('focus', refreshList, { once: true });
 
   const s = site.stats;
-  const details = h('details', { class: 'site', open: open.has(site.id) || null },
+  const details = h('details', { class: 'site ' + site.provider + (site.disabled ? ' off' : ''), open: open.has(site.id) || null },
     h('summary', null,
       h('span', { class: 'name' }, site.id),
       h('span', { class: 'pill ' + (site.disabled ? 'off' : 'on') }, site.disabled ? 'disabled' : 'active'),
-      h('span', { class: 'meta' }, `${site.provider} · ${site.model || (isCli(site.provider) ? 'CLI default' : 'no model')} · token …${site.tokenHint || '????'}`),
+      h('span', { class: 'pill tone-' + site.provider }, (PROVIDERS.find(([p]) => p === site.provider) || [0, site.provider])[1]),
+      h('span', { class: 'meta' }, `${site.model || (isCli(site.provider) ? 'CLI default' : 'no model')} · token …${site.tokenHint || '????'}`),
       h('span', { class: 'meta' }, s.requests ? `${s.requests} req · ${s.errors} err` + (s.lastErrorCode ? ` · last: ${s.lastErrorCode}` : '') : 'no requests yet')),
     h('div', { class: 'body' },
       h('div', { class: 'row' }, field('Provider', provider), field('Model', model), list),
@@ -151,8 +154,8 @@ function cliRow(name, label, how, field, build) {
   const status = !info ? h('span', { class: 'pill bad' }, 'unavailable')
     : !info.version ? h('span', { class: 'pill bad' }, 'not installed')
     : h('span', { class: 'pill ' + (info.loggedIn ? 'on' : 'off') }, `${info.version} · ${info.loggedIn ? 'logged in' : 'not logged in'}`);
-  return h('div', { class: 'cli' },
-    h('div', null, h('label', null, label + ' ', status)),
+  return h('div', { class: 'sub' },
+    h('h3', null, label, status),
     h('div', { class: 'meta' }, how),
     h('div', { class: 'row' }, input),
     h('div', { class: 'actions' },
@@ -171,9 +174,10 @@ function cliRow(name, label, how, field, build) {
 function keyRow(provider, label) {
   const info = state.keys[provider];
   const input = h('input', { type: 'password', autocomplete: 'off', placeholder: info.set ? 'Replace key' : 'Paste key' });
-  return h('div', { class: 'row' },
-    h('div', null, h('label', null, label + ' ', h('span', { class: 'pill ' + (info.set ? 'on' : 'off') }, info.set ? `set …${info.hint} (${info.source})` : 'not set')), input),
-    h('div', { class: 'actions end' },
+  return h('div', { class: 'sub' },
+    h('h3', null, label, h('span', { class: 'pill ' + (info.set ? 'on' : 'off') }, info.set ? `set …${info.hint} (${info.source})` : 'not set')),
+    h('div', { class: 'row' }, input),
+    h('div', { class: 'actions' },
       h('button', { type: 'button', onclick: () => {
         if (!input.value.trim()) { notice = { kind: 'err', text: 'enter a key first' }; render(); return; }
         run(async () => { await api('/keys', 'PUT', { [provider]: input.value.trim() }); delete models[provider]; await refresh(); }, label + ' key saved');
@@ -193,22 +197,72 @@ function passwordForm() {
 }
 
 /* ---------- main ---------- */
+function tile(tone, n, label) { return h('div', { class: 'tile ' + tone }, h('div', { class: 'n' }, n), h('div', { class: 'l' }, label)); }
+
+function tiles() {
+  const total = state.sites.reduce((n, x) => n + x.stats.requests, 0);
+  const errors = state.sites.reduce((n, x) => n + x.stats.errors, 0);
+  const active = state.sites.filter((x) => !x.disabled).length;
+  const keys = ['anthropic', 'openai'].filter((p) => state.keys[p].set).length;
+  const login = (i) => !i || !i.version ? 'n/a' : i.loggedIn ? 'Logged in' : 'Not logged in';
+  return h('div', { class: 'tiles' },
+    tile('blue', `${active}/${state.sites.length}`, 'Sites active'),
+    tile('violet', total, 'Requests since start'),
+    tile(errors ? 'red' : 'green', errors, 'Errors'),
+    tile(cli && cli.claude.loggedIn ? 'green' : 'orange', login(cli && cli.claude), 'Claude CLI'),
+    tile(cli && cli.codex.loggedIn ? 'green' : 'orange', login(cli && cli.codex), 'Codex CLI'),
+    tile(keys ? 'teal' : 'orange', `${keys}/2`, 'API keys set'));
+}
+
+function sitesTab() {
+  const add = h('details', { class: 'add' }, h('summary', null, '+ Add site'), h('div', null, addSiteForm()));
+  return [
+    h('section', { class: 'card' }, h('h2', null, h('span', { class: 'grow' }, 'Sites'), h('span', { class: 'pill' }, location.origin)),
+      state.sites.length ? state.sites.map(siteCard) : h('div', { class: 'empty' }, 'No sites yet.'),
+      add)
+  ];
+}
+
+const openSections = new Set();   // collapsible cards the user has expanded (collapsed by default)
+
+function collapsible(id, title, summary, ...children) {
+  const d = h('details', { class: 'card fold', open: openSections.has(id) || null },
+    h('summary', null, h('span', { class: 'grow' }, title), summary), ...children);
+  d.addEventListener('toggle', () => { d.open ? openSections.add(id) : openSections.delete(id); });
+  return d;
+}
+
+function loginsTab() {
+  const state2 = (i) => !i || !i.version ? 'bad' : i.loggedIn ? 'on' : 'off';
+  const keyPill = (p) => h('span', { class: 'pill ' + (state.keys[p].set ? 'on' : 'off') }, p + (state.keys[p].set ? ' ✓' : ' –'));
+  return [
+    collapsible('cli', 'Subscription logins (CLI)',
+      h('span', { class: 'sum' }, h('span', { class: 'pill ' + state2(cli && cli.claude) }, 'Claude'), h('span', { class: 'pill ' + state2(cli && cli.codex) }, 'Codex')),
+      h('div', { class: 'grid2' },
+        cliRow('claude', 'Claude', 'On your Mac run: claude setup-token', 'claudeToken'),
+        cliRow('codex', 'ChatGPT (Codex)', 'On your Mac run: codex login, then paste ~/.codex/auth.json', 'codexAuth'))),
+    collapsible('keys', 'AI provider keys',
+      h('span', { class: 'sum' }, keyPill('anthropic'), keyPill('openai')),
+      h('div', { class: 'grid2' }, keyRow('anthropic', 'Anthropic'), keyRow('openai', 'OpenAI')))
+  ];
+}
+
+function accountTab() {
+  return [h('section', { class: 'card' }, h('h2', null, 'Admin password'), passwordForm())];
+}
+
 function render() {
-  const base = location.origin;
+  const body = { sites: sitesTab, logins: loginsTab, account: accountTab }[tab]();
   app.replaceChildren(...[
-    h('header', { class: 'top' },
+    h('header', { class: 'topbar' },
       h('h1', null, 'AJMCP Admin'), h('span', { class: 'who' }, `v${state.version} · ${state.user}`),
       h('button', { type: 'button', onclick: async () => { try { await api('/logout', 'POST'); } catch { /* already out */ } state = null; renderLogin(); } }, 'Sign out')),
+    tiles(),
     notice ? h('div', { class: 'notice ' + notice.kind }, notice.text, notice.secret ? h('div', { class: 'secret' }, notice.secret) : null, notice.secret ? copyButton(notice.secret) : null) : null,
     !state.storage ? h('div', { class: 'notice err' }, 'No persistent storage: changes cannot be saved.') : null,
-    h('section', { class: 'card' }, h('h2', null, h('span', { class: 'grow' }, 'Sites'), h('span', { class: 'pill' }, base)),
-      state.sites.length ? state.sites.map(siteCard) : h('div', { class: 'empty' }, 'No sites yet.')),
-    h('section', { class: 'card' }, h('h2', null, 'Add site'), addSiteForm()),
-    h('section', { class: 'card' }, h('h2', null, 'Subscription logins (CLI)'),
-      cliRow('claude', 'Claude', 'On your Mac run: claude setup-token', 'claudeToken'),
-      cliRow('codex', 'ChatGPT (Codex)', 'On your Mac run: codex login, then paste ~/.codex/auth.json', 'codexAuth')),
-    h('section', { class: 'card' }, h('h2', null, 'AI provider keys'), keyRow('anthropic', 'Anthropic'), keyRow('openai', 'OpenAI')),
-    h('section', { class: 'card' }, h('h2', null, 'Admin password'), passwordForm())].filter(Boolean));
+    h('nav', { class: 'tabs' }, TABS.map(([key, label]) => h('button', { type: 'button', class: key === tab ? 'on' : '', onclick: () => { tab = key; history.replaceState(null, '', '#' + key); render(); } }, label))),
+    ...body
+  ].filter(Boolean));
 }
 
 (async () => {
