@@ -6,10 +6,10 @@ const boundedInt = (value, fallback, min, max) => {
   return Number.isSafeInteger(n) && n >= min && n <= max ? n : fallback;
 };
 
-function parseSites(raw) {
+function parseSites(raw, allowEmpty = false) {
   let config;
   try { config = JSON.parse(raw); } catch { throw new Error('Invalid JSON in site configuration'); }
-  if (!config || !Array.isArray(config.sites) || !config.sites.length) {
+  if (!config || !Array.isArray(config.sites) || (!config.sites.length && !allowEmpty)) {
     throw new Error('Site configuration must contain a non-empty sites array');
   }
   const ids = new Set();
@@ -34,16 +34,23 @@ function parseSites(raw) {
 
 export function loadConfig(env = process.env, read = readFileSync) {
   const path = env.SITES_CONFIG_FILE ? resolve(env.SITES_CONFIG_FILE) : '';
-  if (!path && !env.SITES_JSON) throw new Error('Configure SITES_CONFIG_FILE or SITES_JSON before starting');
-  const sites = parseSites(path ? read(path, 'utf8') : env.SITES_JSON);
+  const dataDir = env.DATA_DIR ? resolve(env.DATA_DIR) : '';
+  // With a data directory the admin UI owns the site list, so the seed file may be empty or absent.
+  if (!path && !env.SITES_JSON && !dataDir) throw new Error('Configure SITES_CONFIG_FILE or SITES_JSON before starting');
+  const sites = path || env.SITES_JSON ? parseSites(path ? read(path, 'utf8') : env.SITES_JSON, Boolean(dataDir)) : [];
+  const adminUser = String(env.ADMIN_USER || '');
+  const adminPasswordHash = String(env.ADMIN_PASSWORD_HASH || '');
+  if (Boolean(adminUser) !== Boolean(adminPasswordHash)) throw new Error('ADMIN_USER and ADMIN_PASSWORD_HASH must be set together');
+  if (adminUser && !dataDir) throw new Error('The admin UI needs DATA_DIR');
   const adminToken = String(env.ADMIN_TOKEN || '');
   if (adminToken && adminToken.length < 32) throw new Error('ADMIN_TOKEN must be at least 32 characters');
   if (adminToken && sites.some((site) => site.token === adminToken)) throw new Error('Admin token must differ from site tokens');
-  return Object.freeze({
+  return {
     host: env.HOST || '0.0.0.0',
     port: boundedInt(env.PORT, 3000, 1, 65535),
     sites,
     adminToken,
+    dataDir, adminUser, adminPasswordHash,
     openaiApiKey: env.OPENAI_API_KEY || '',
     anthropicApiKey: env.ANTHROPIC_API_KEY || '',
     openaiModel: env.OPENAI_MODEL || '',
@@ -59,5 +66,5 @@ export function loadConfig(env = process.env, read = readFileSync) {
     agentTimeoutMs: boundedInt(env.AGENT_TIMEOUT_MS, 90000, 1000, 300000),
     enableAgentJobs: env.ENABLE_AGENT_JOBS === 'true',
     agentWorkspace: env.AGENT_WORKSPACE || '/workspace'
-  });
+  };
 }

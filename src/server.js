@@ -6,6 +6,8 @@ import { generateReply, InputError } from './provider.js';
 import { runAgent, installedToolVersions } from './agents.js';
 import { handleMcp } from './mcp.js';
 import { APP_VERSION } from './version.js';
+import { createAdmin, Stats } from './admin.js';
+import { SettingsStore } from './store.js';
 
 function json(res, status, data, requestId) {
   if (res.headersSent) return;
@@ -30,11 +32,16 @@ async function readBody(req, maxBytes) {
   catch { throw new InputError('invalid_json'); }
 }
 
-function validateHost(req, config) {
+function validateHostHeader(req, config) {
   if (config.allowedHosts.size) {
     const host = String(req.headers.host || '').replace(/:\d+$/, '').toLowerCase();
     if (!config.allowedHosts.has(host)) return false;
   }
+  return true;
+}
+
+function validateHost(req, config) {
+  if (!validateHostHeader(req, config)) return false;
   const origin = req.headers.origin;
   if (origin && !config.allowedOrigins.has(origin)) return false;
   return true;
@@ -52,8 +59,13 @@ function prepareAjcoreChat(body, config) {
   return { sessionId: body.sessionId, messages };
 }
 
-export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAgent, mcpHandler = handleMcp, toolVersions = installedToolVersions } = {}) {
+export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAgent, mcpHandler = handleMcp, toolVersions = installedToolVersions, store = new SettingsStore(config) } = {}) {
   const limiter = new Limiter(config);
+  const stats = new Stats();
+  // The admin UI exists only when ADMIN_USER / ADMIN_PASSWORD_HASH are configured (see DATA_DIR).
+  const admin = config.adminUser
+    ? createAdmin({ config, store, stats, fetchFn, readBody })
+    : null;
   return http.createServer(async (req, res) => {
     const id = randomUUID();
     const start = Date.now();
@@ -67,6 +79,12 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
       }
       if (req.method === 'GET' && path === '/health/ready') {
         status = 200; return json(res, status, { status: 'ready' }, id);
+      }
+      // The admin UI is a same-origin browser app: it has its own session login and Origin check.
+      if (admin && (path === '/admin' || path.startsWith('/admin/'))) {
+        if (!validateHostHeader(req, config)) { status = 403; return json(res, status, { error: 'untrusted_origin_or_host' }, id); }
+        await admin(req, res, path);
+        status = res.statusCode; return;
       }
       if (!validateHost(req, config)) { status = 403; return json(res, status, { error: 'untrusted_origin_or_host' }, id); }
       const identity = identityForBearer(req.headers.authorization, config);
@@ -101,7 +119,10 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
           const ajcore = path === '/v1/ajcore/reply' ? prepareAjcoreChat(body, config) : null;
           if (!ajcore && (!body || typeof body !== 'object' || Array.isArray(body))) throw new InputError('invalid_request');
           // Clients cannot choose provider, model, system instructions or another tenant.
-          const reply = await generateReply(site, ajcore ? ajcore.messages : body.messages, config, fetchFn);
+          let reply;
+          try { reply = await generateReply(site, ajcore ? ajcore.messages : body.messages, config, fetchFn); }
+          catch (error) { stats.fail(site.id, error.code || error.message); throw error; }
+          stats.ok(site.id);
           status = 200;
           return json(res, status, {
             requestId: id, site: site.id,

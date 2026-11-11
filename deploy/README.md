@@ -5,8 +5,8 @@ This is the recommended, clone-and-run workflow. It builds the AJMCP + Codex + C
 ## First deployment
 
 1. Clone the repository; authenticate using your normal `oc login`. Have Node.js and oc installed locally.
-2. Nothing to copy. `.env.local` is optional (set `OPENSHIFT_PROJECT`, `AJMCP_HOST` or `CERT_MANAGER_CLUSTER_ISSUER` there only if you want something other than `ajmcp`, `ajmcp.ncllcagents.com` and `letsencrypt-ncllc`). On the first run the script asks for an OpenAI or Anthropic API key (hidden input) unless it is already in the environment.
-3. If `sites.json` is missing, the first run creates it (ignored by Git): one site, a random 64-character token, your provider and model. The token is printed once and kept in `sites.json`; put it in that WordPress site's AJMCP connector. To add more sites, edit the file and run with `--sync-secrets`.
+2. Nothing to copy. `.env.local` is optional (set `OPENSHIFT_PROJECT`, `AJMCP_HOST` or `CERT_MANAGER_CLUSTER_ISSUER` there only if you want something other than `ajmcp`, `ajmcp.ncllcagents.com` and `letsencrypt-ncllc`).
+3. The first run prints the web admin login (`https://<host>/admin`, user + generated password) once. Only the password's hash is stored in the cluster. Later runs show the user only; `--reset-admin` issues a new password. Sites, site tokens, OpenAI/Anthropic keys and the admin password are managed in the admin; settings live on a 1Gi persistent volume (`ajmcp-data`). An optional `sites.json` / `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` only seeds the first start.
 4. Create the DNS record for `ajmcp.ncllcagents.com` pointing to your OpenShift router (CNAME to the public router hostname or A/AAAA to router addresses). Ensure the existing Let's Encrypt/Cloudflare DNS-01 issuer covers `ncllcagents.com`.
 5. Run `./bin/3-oc-deploy.sh`. The script creates the project if needed, initializes `ajmcp-secrets`, performs a safe in-cluster image build, and deploys a pinned image digest.
 

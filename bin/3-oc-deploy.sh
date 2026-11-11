@@ -16,17 +16,21 @@ Defaults: package.json version, interactive bump when Git dirty, keep existing
 OpenShift secrets, build in cluster, deploy an immutable image digest.
   --skip-bump     Skip version/commit/push prompt for uncommitted files
   --sync-secrets  Explicitly overwrite ajmcp-secrets using local private files
-First run: just run it. It asks for an AI provider key and creates sites.json for you.
+  --reset-admin   Generate a new admin password for the web admin and show it once
+First run: just run it. It creates the web admin login and prints it once (save it).
+Sites, AI keys and the admin password are then managed at https://<host>/admin.
 USAGE
 }
 
 VERSION_OVERRIDE=""
 SKIP_BUMP=false
 SYNC_SECRETS=false
+RESET_ADMIN=false
 for arg in "$@"; do
   case "$arg" in
     --skip-bump) SKIP_BUMP=true ;;
     --sync-secrets) SYNC_SECRETS=true ;;
+    --reset-admin) RESET_ADMIN=true ;;
     --help|-h) usage; exit 0 ;;
     -*) echo "ERROR: Unknown option $arg" >&2; usage; exit 2 ;;
     *)
@@ -36,50 +40,45 @@ for arg in "$@"; do
   esac
 done
 
-interactive() { [[ -t 0 && -t 1 ]]; }
-
-# Asks for the provider key(s) when none is set. Input is hidden and never written to disk by this script.
-ask_for_api_keys() {
-  if [[ -n "${OPENAI_API_KEY:-}" || -n "${ANTHROPIC_API_KEY:-}" ]]; then return 0; fi
-  if ! interactive; then return 0; fi
-  echo "First run: AJMCP needs at least one AI provider key (stored only in the cluster Secret)."
-  read -r -s -p "Anthropic API key (Enter to skip): " ANTHROPIC_API_KEY; echo
-  read -r -s -p "OpenAI API key (Enter to skip): " OPENAI_API_KEY; echo
+b64() { printf %s "$1" | base64 | tr -d '\n'; }
+unb64() { printf %s "$1" | node -p "Buffer.from(require('fs').readFileSync(0,'utf8'),'base64').toString()"; }
+secret_field() {
+  local value
+  value="$(oc get secret ajmcp-secrets -n "$PROJECT" -o "go-template={{index .data \"$1\"}}" 2>/dev/null || true)"
+  [[ "$value" == "<no value>" ]] && value=""
+  printf %s "$value"
 }
 
-# Creates sites.json (private, ignored by Git) with one site and a random token when it does not exist.
-ensure_sites_file() {
-  local file="$1"
-  [[ -f "$file" ]] && return 0
-  if ! interactive; then
-    echo "ERROR: Missing $file. Run this script from a terminal once to create it, or copy examples/sites.example.json." >&2
-    exit 1
+# Web admin login. The password is shown once and only its scrypt hash is stored in the cluster Secret.
+ADMIN_PASSWORD_SHOWN=""
+ADMIN_USER_NAME=""
+ensure_admin_login() {
+  local hash_b64 user_b64 password hash
+  hash_b64="$(secret_field admin-password-hash)"
+  user_b64="$(secret_field admin-user)"
+  if [[ -n "$hash_b64" && -n "$user_b64" && "$RESET_ADMIN" == false ]]; then
+    ADMIN_USER_NAME="$(unb64 "$user_b64")"
+    return 0
   fi
-  command -v openssl >/dev/null 2>&1 || { echo "ERROR: openssl is required to generate a site token." >&2; exit 1; }
-  local site_id provider model token default_provider default_model
-  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then default_provider="anthropic"; else default_provider="openai"; fi
+  ADMIN_USER_NAME="${ADMIN_USER:-}"
+  [[ -z "$ADMIN_USER_NAME" && -n "$user_b64" ]] && ADMIN_USER_NAME="$(unb64 "$user_b64")"
+  ADMIN_USER_NAME="${ADMIN_USER_NAME:-admin}"
+  password="$(node --input-type=module -e 'import { generatePassword } from "./src/password.js"; console.log(generatePassword())')"
+  hash="$(AJMCP_PW="$password" node --input-type=module -e 'import { hashPassword } from "./src/password.js"; console.log(await hashPassword(process.env.AJMCP_PW))')"
+  [[ -n "$password" && -n "$hash" ]] || { echo "ERROR: Could not create the admin login." >&2; exit 1; }
+  oc patch secret ajmcp-secrets -n "$PROJECT" --type=merge \
+    -p "{\"data\":{\"admin-user\":\"$(b64 "$ADMIN_USER_NAME")\",\"admin-password-hash\":\"$(b64 "$hash")\"}}" >/dev/null
+  ADMIN_PASSWORD_SHOWN="$password"
+  show_admin_login
+}
+
+show_admin_login() {
   echo ""
-  echo "Creating $file (one website that may call AJMCP; add more later by editing the file)."
-  read -r -p "Site id [ncllcagents]: " site_id; site_id="${site_id:-ncllcagents}"
-  read -r -p "Provider anthropic/openai [$default_provider]: " provider; provider="${provider:-$default_provider}"
-  [[ "$provider" == "anthropic" || "$provider" == "openai" ]] || { echo "ERROR: provider must be anthropic or openai" >&2; exit 1; }
-  default_model=""; [[ "$provider" == "anthropic" ]] && default_model="claude-sonnet-5-5"
-  if [[ -n "$default_model" ]]; then
-    read -r -p "Model id [$default_model]: " model; model="${model:-$default_model}"
-  else
-    read -r -p "Model id (a model your OpenAI account supports): " model
+  echo "  Web admin:  https://$HOSTNAME/admin"
+  echo "  User:       $ADMIN_USER_NAME"
+  if [[ -n "$ADMIN_PASSWORD_SHOWN" ]]; then
+    echo "  Password:   $ADMIN_PASSWORD_SHOWN   (shown once - save it now; change it in the admin)"
   fi
-  [[ -n "$model" ]] || { echo "ERROR: a model id is required." >&2; exit 1; }
-  token="$(openssl rand -hex 32)"
-  SITE_ID="$site_id" SITE_PROVIDER="$provider" SITE_MODEL="$model" SITE_TOKEN="$token" node -e '
-    const fs = require("fs");
-    const example = JSON.parse(fs.readFileSync("examples/sites.example.json", "utf8"));
-    const systemPrompt = example.sites[0].systemPrompt;
-    fs.writeFileSync(process.argv[1], JSON.stringify({ sites: [{ id: process.env.SITE_ID, token: process.env.SITE_TOKEN, provider: process.env.SITE_PROVIDER, model: process.env.SITE_MODEL, systemPrompt }] }, null, 2) + "\n");
-  ' "$file"
-  chmod 600 "$file"
-  echo "Wrote $file. This site's token (put it in that WordPress site's AJMCP connector; it is also stored in $file):"
-  echo "  $token"
   echo ""
 }
 
@@ -145,15 +144,15 @@ chmod 700 "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 
 if [[ "$SYNC_SECRETS" == true ]] || ! oc get secret ajmcp-secrets -n "$PROJECT" >/dev/null 2>&1; then
+  # sites.json is only a seed: once you save anything in the web admin, the admin's list takes over.
   SITE_FILE="${AJMCP_SITES_FILE:-sites.json}"
   OPENAI_API_KEY="${OPENAI_API_KEY:-}"
   ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
-  ask_for_api_keys
-  ensure_sites_file "$SITE_FILE"
-  node - "$SITE_FILE" <<'NODE'
+  if [[ -f "$SITE_FILE" ]]; then cp "$SITE_FILE" "$TMP/sites.json"; else echo '{"sites":[]}' > "$TMP/sites.json"; fi
+  node - "$TMP/sites.json" <<'NODE'
 const fs = require('fs');
 const config = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-if (!Array.isArray(config.sites) || !config.sites.length) throw new Error('sites.json needs one or more sites');
+if (!Array.isArray(config.sites)) throw new Error('sites.json needs a sites array');
 const tokens = new Set();
 for (const site of config.sites) {
   if (!/^[a-z0-9][a-z0-9-_]{1,63}$/.test(site.id || '')) throw new Error('Invalid site id');
@@ -161,13 +160,8 @@ for (const site of config.sites) {
   if (tokens.has(site.token)) throw new Error('Duplicate site token');
   tokens.add(site.token);
   if (!['openai','anthropic'].includes(site.provider || 'openai')) throw new Error('Invalid site provider');
-  if (!site.model || /^(SET_|REPLACE_)/.test(site.model)) throw new Error('Site '+site.id+' needs a supported model id');
 }
 NODE
-  if [[ -z "$OPENAI_API_KEY" && -z "$ANTHROPIC_API_KEY" ]]; then
-    echo "ERROR: An AI provider key is required (OPENAI_API_KEY or ANTHROPIC_API_KEY, in the environment or .env.local)." >&2
-    exit 1
-  fi
   ADMIN_TOKEN="${ADMIN_TOKEN:-}"
   if [[ -z "$ADMIN_TOKEN" ]]; then
     command -v openssl >/dev/null 2>&1 || { echo "ERROR: openssl required for token generation." >&2; exit 1; }
@@ -180,23 +174,30 @@ NODE
   printf %s "$OPENAI_API_KEY" > "$TMP/openai-api-key"
   printf %s "$ANTHROPIC_API_KEY" > "$TMP/anthropic-api-key"
   printf %s "$ADMIN_TOKEN" > "$TMP/admin-token"
-  cp "$SITE_FILE" "$TMP/sites.json"
   chmod 600 "$TMP"/*
+  # --sync-secrets must keep the existing web admin login: carry its Secret fields over.
+  EXTRA=()
+  for key in admin-user admin-password-hash; do
+    value="$(secret_field "$key")"
+    if [[ -n "$value" ]]; then printf %s "$(unb64 "$value")" > "$TMP/$key"; EXTRA+=("--from-file=$key=$TMP/$key"); fi
+  done
   oc create secret generic ajmcp-secrets -n "$PROJECT" \
     --from-file="openai-api-key=$TMP/openai-api-key" \
     --from-file="anthropic-api-key=$TMP/anthropic-api-key" \
     --from-file="admin-token=$TMP/admin-token" \
     --from-file="sites.json=$TMP/sites.json" \
+    ${EXTRA[@]+"${EXTRA[@]}"} \
     --dry-run=client -o yaml | oc apply -n "$PROJECT" -f -
 else
   echo "Keeping current ajmcp-secrets. Use --sync-secrets to rotate deliberately."
 fi
-for key in openai-api-key anthropic-api-key admin-token sites.json; do
-  if [[ -z "$(oc get secret ajmcp-secrets -n "$PROJECT" -o "go-template={{index .data \"$key\"}}" 2>/dev/null)" ]]; then
+for key in admin-token sites.json; do
+  if [[ -z "$(secret_field "$key")" ]]; then
     echo "ERROR: ajmcp-secrets is missing $key. Run with --sync-secrets." >&2
     exit 1
   fi
 done
+ensure_admin_login
 
 render() {
   sed -e "s|AJMCP_HOST_PLACEHOLDER|$HOSTNAME|g" \
@@ -206,8 +207,8 @@ render() {
       -e "s|AJMCP_DEPLOYED_AT_PLACEHOLDER|${DEPLOYED_AT:-placeholder}|g" "$1"
 }
 
-echo "Applying ImageStream, BuildConfig, ConfigMap and Service..."
-for file in openshift/imagestream.yaml openshift/buildconfig.yaml openshift/configmap.yaml openshift/service.yaml; do
+echo "Applying ImageStream, BuildConfig, ConfigMap, Service and data volume..."
+for file in openshift/imagestream.yaml openshift/buildconfig.yaml openshift/configmap.yaml openshift/service.yaml openshift/pvc.yaml; do
   render "$file" | oc apply -n "$PROJECT" -f -
 done
 oc patch buildconfig "$APP" -n "$PROJECT" --type=merge \
@@ -249,6 +250,7 @@ echo "URL: https://$HOSTNAME"
 echo "Status: https://$HOSTNAME/health/ready"
 echo "Route: oc get routes -n '$PROJECT'"
 echo "TLS: oc get certificate ajmcp-tls -n '$PROJECT'"
+show_admin_login
 echo "Ensure DNS points $HOSTNAME to OpenShift router; cert-manager manages renewal."
 if command -v curl >/dev/null 2>&1; then
   if curl --connect-timeout 5 --max-time 10 -fsS "https://$HOSTNAME/health/ready" >/dev/null 2>&1; then

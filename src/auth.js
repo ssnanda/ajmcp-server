@@ -1,10 +1,12 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 
+const sha = (value) => createHash('sha256').update(String(value)).digest();
+
+export const tokenHash = (token) => sha(token).toString('hex');
+
 function constantTimeMatch(a, b) {
   if (!a || !b) return false;
-  const left = createHash('sha256').update(a).digest();
-  const right = createHash('sha256').update(b).digest();
-  return timingSafeEqual(left, right);
+  return timingSafeEqual(sha(a), sha(b));
 }
 
 export function identityForBearer(header, config) {
@@ -12,10 +14,15 @@ export function identityForBearer(header, config) {
   if (!match) return null;
   const candidate = match[1];
   if (constantTimeMatch(candidate, config.adminToken)) return { kind: 'admin', id: 'admin' };
+  const candidateHash = sha(candidate);
   // Always iterate every tenant; caller-supplied site identifiers are never trusted.
+  // Sites carry either a stored tokenHash (managed in the admin UI) or a plain token (seed file).
   let matched = null;
   for (const site of config.sites) {
-    if (constantTimeMatch(candidate, site.token)) matched = { kind: 'site', id: site.id, site };
+    const expected = site.tokenHash ? Buffer.from(site.tokenHash, 'hex') : sha(site.token || '');
+    if (expected.length === candidateHash.length && timingSafeEqual(candidateHash, expected) && !site.disabled) {
+      matched = { kind: 'site', id: site.id, site };
+    }
   }
   return matched;
 }

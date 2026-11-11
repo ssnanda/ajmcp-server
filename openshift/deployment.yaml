@@ -8,9 +8,9 @@ metadata:
 spec:
   replicas: 1
   revisionHistoryLimit: 3
+  # ReadWriteOnce data volume: the old pod must release it before the new one starts.
   strategy:
-    type: RollingUpdate
-    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+    type: Recreate
   selector:
     matchLabels: { app: ajmcp-server }
   template:
@@ -39,8 +39,15 @@ spec:
             - name: ADMIN_TOKEN
               valueFrom:
                 secretKeyRef: { name: ajmcp-secrets, key: admin-token }
+            - name: ADMIN_USER
+              valueFrom:
+                secretKeyRef: { name: ajmcp-secrets, key: admin-user }
+            - name: ADMIN_PASSWORD_HASH
+              valueFrom:
+                secretKeyRef: { name: ajmcp-secrets, key: admin-password-hash }
           volumeMounts:
             - { name: site-config, mountPath: /run/secrets/ajmcp, readOnly: true }
+            - { name: data, mountPath: /data }
             - { name: tmp, mountPath: /tmp }
             - { name: workspace, mountPath: /workspace, readOnly: true }
           securityContext:
@@ -64,6 +71,8 @@ spec:
           secret:
             secretName: ajmcp-secrets
             items: [ { key: sites.json, path: sites.json } ]
+        - name: data
+          persistentVolumeClaim: { claimName: ajmcp-data }
         - name: tmp
           emptyDir: { sizeLimit: 512Mi }
         - name: workspace

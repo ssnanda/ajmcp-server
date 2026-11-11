@@ -1,0 +1,11 @@
+# Holds admin-UI settings (sites, token hashes, provider keys, admin password hash). Never recreated by deploys.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ajmcp-data
+  labels: { app: ajmcp-server }
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi

@@ -9,6 +9,7 @@ data:
   ALLOWED_HOSTS: "AJMCP_HOST_PLACEHOLDER"
   ALLOWED_ORIGINS: ""
   SITES_CONFIG_FILE: "/run/secrets/ajmcp/sites.json"
+  DATA_DIR: "/data"
   HOME: "/tmp/ajmcp"
   AGENT_WORKSPACE: "/workspace"
   ENABLE_AGENT_JOBS: "false"
