@@ -6,6 +6,9 @@ metadata:
 spec:
   successfulBuildsHistoryLimit: 1
   failedBuildsHistoryLimit: 1
+  # A build normally takes about a minute. If one hangs (for example a stalled npm download) it fails by itself after
+  # 10 minutes instead of blocking every later build, because builds run one at a time.
+  completionDeadlineSeconds: 600
   source:
     type: Binary
     binary: {}

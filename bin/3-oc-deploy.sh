@@ -224,11 +224,17 @@ for phase in Succeeded Failed; do
   oc get pods -n "$PROJECT" -l openshift.io/build.name --field-selector="status.phase=$phase" -o name 2>/dev/null \
     | xargs -r -n1 oc delete -n "$PROJECT" --ignore-not-found=true
 done
-# Builds run one at a time. If one is still going (or stuck) this deploy would wait behind it and time out, so say so up front.
-BUSY="$(oc get builds -n "$PROJECT" -l buildconfig="$APP" --no-headers 2>/dev/null | awk '$4 ~ /^(New|Pending|Running)$/ {print $1}' | tr '\n' ' ')"
-if [[ -n "$BUSY" ]]; then
-  echo "WARNING: an earlier build is still active: $BUSY" >&2
-  echo "         This build will queue behind it. If it is stuck: oc cancel-build <name> -n $PROJECT" >&2
+# Builds run one at a time, and this deploy replaces anything earlier. Cancel any build of this app that is still
+# queued or running (a stuck one would otherwise block this deploy until it times out), and say which ones.
+STALE="$(oc get builds -n "$PROJECT" -l buildconfig="$APP" --no-headers 2>/dev/null | awk '$4 ~ /^(New|Pending|Running)$/ {print $1}')"
+if [[ -n "$STALE" ]]; then
+  echo "Cancelling earlier unfinished build(s): $(echo "$STALE" | tr '\n' ' ')"
+  echo "$STALE" | xargs -r -n1 oc cancel-build -n "$PROJECT" >/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    LEFT="$(oc get builds -n "$PROJECT" -l buildconfig="$APP" --no-headers 2>/dev/null | awk '$4 ~ /^(New|Pending|Running)$/ {print $1}')"
+    [[ -z "$LEFT" ]] && break
+    sleep 5
+  done
 fi
 echo "Building AJMCP + Codex + Claude inside OpenShift..."
 oc start-build "$APP" -n "$PROJECT" --from-dir="$TMP/build" --follow --wait
