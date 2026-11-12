@@ -82,11 +82,41 @@ async function loadModels(provider, datalist) {
 }
 
 const kb = (chars) => chars >= 1000 ? Math.round(chars / 1000) + ' KB' : chars + ' chars';
+const providerLabel = (p) => (PROVIDERS.find(([k]) => k === p) || [0, p])[1];
+const SECTIONS = [['general', 'General'], ['knowledge', 'Knowledge'], ['access', 'Access']];
 
-/** Reference material for a site, plus a box to try a question against it. */
-function knowledgeBlock(site, strict, fallback) {
+// Tree selection: which site and which part of it is shown on the right.
+let sel = { id: null, section: 'general', add: false };
+const treeOpen = new Set();
+
+function modelPicker(site) {
+  const provider = h('select', null, ...PROVIDERS.map(([p, label]) => h('option', { value: p, selected: p === (site ? site.provider : 'anthropic') }, label)));
+  const list = h('datalist', { id: 'models-' + (site ? site.id : 'new') });
+  const model = h('input', { value: site ? site.model : '', list: list.id, placeholder: 'blank = CLI default (API: model id)' });
+  const refreshList = () => loadModels(provider.value, list);
+  provider.addEventListener('change', refreshList);
+  model.addEventListener('focus', refreshList, { once: true });
+  return { provider, model, list };
+}
+
+/* ---------- right-hand panels ---------- */
+function generalPanel(site) {
+  const { provider, model, list } = modelPicker(site);
+  const prompt = h('textarea', { rows: 8 });
+  prompt.value = site.systemPrompt;
+  return [
+    h('div', { class: 'row' }, field('Provider', provider), field('Model', model), list),
+    h('div', null, h('label', null, 'Instructions (system prompt)'), prompt),
+    h('div', { class: 'actions mt' },
+      h('button', { class: 'primary', type: 'button', onclick: () => run(() => api('/sites/' + site.id, 'PUT', { provider: provider.value, model: model.value, systemPrompt: prompt.value }).then(refresh), 'Saved ' + site.id) }, 'Save'))
+  ];
+}
+
+function knowledgePanel(site) {
+  const strict = h('input', { type: 'checkbox', checked: site.strict || null });
+  const fallback = h('input', { value: site.fallback, placeholder: 'Reply when the answer is not in the knowledge' });
   const title = h('input', { placeholder: 'Title (e.g. Pricing, FAQ, Services)' });
-  const text = h('textarea', { placeholder: 'Paste text here, or choose a .txt / .md / .csv / .json file' });
+  const text = h('textarea', { placeholder: 'Paste text here, or choose a .txt / .md / .csv / .json file', rows: 6 });
   const file = h('input', { type: 'file', accept: '.txt,.md,.markdown,.csv,.json,.html,.htm,text/*' });
   file.addEventListener('change', async () => {
     const f = file.files[0];
@@ -104,8 +134,8 @@ function knowledgeBlock(site, strict, fallback) {
           await run(() => api('/sites/' + site.id + '/knowledge/' + d.id, 'DELETE').then(refresh), 'Removed ' + d.title);
         } }, 'Remove')))
     : [h('div', { class: 'empty' }, 'No documents yet.')];
-  return h('div', { class: 'knowledge' },
-    h('h4', null, 'Knowledge ', h('span', { class: 'pill' }, `${site.knowledge.length} docs · ${kb(site.knowledgeChars)}`)),
+  return [
+    h('h3', null, 'Documents ', h('span', { class: 'pill' }, `${site.knowledge.length} docs · ${kb(site.knowledgeChars)}`)),
     ...docs,
     h('div', { class: 'row mt' }, field('Title', title), field('File', file)),
     h('div', null, text),
@@ -114,86 +144,86 @@ function knowledgeBlock(site, strict, fallback) {
         if (!title.value.trim() || !text.value.trim()) { notice = { kind: 'err', text: 'title and text are required' }; render(); return; }
         run(() => api('/sites/' + site.id + '/knowledge', 'POST', { title: title.value, text: text.value }).then(refresh), 'Added ' + title.value.trim());
       } }, 'Add document')),
-    h('label', { class: 'check mt' }, strict, ' Answer only from this knowledge'),
+    h('h3', { class: 'mt' }, 'Behavior'),
+    h('label', { class: 'check' }, strict, ' Answer only from this knowledge'),
     h('div', { class: 'row' }, field('Fallback reply', fallback)),
+    h('div', { class: 'actions' },
+      h('button', { class: 'primary', type: 'button', onclick: () => run(() => api('/sites/' + site.id, 'PUT', { strict: strict.checked, fallback: fallback.value }).then(refresh), 'Saved ' + site.id) }, 'Save')),
+    h('h3', { class: 'mt' }, 'Try it'),
     h('div', { class: 'actions' }, question,
       h('button', { type: 'button', onclick: () => run(async () => {
         if (!question.value.trim()) return;
         const r = await api('/sites/' + site.id + '/test', 'POST', { question: question.value });
         notice = r.ok ? { kind: 'ok', text: `${site.id} answered: ${r.reply}` } : { kind: 'err', text: `${site.id}: ${words(r.error)}` };
         await refresh();
-      }) }, 'Ask')));
+      }) }, 'Ask'))
+  ];
 }
 
-function siteCard(site) {
-  const provider = h('select', null, ...PROVIDERS.map(([p, label]) => h('option', { value: p, selected: p === site.provider }, label)));
-  const list = h('datalist', { id: 'models-' + site.id });
-  const model = h('input', { value: site.model, list: 'models-' + site.id, placeholder: isCli(site.provider) ? 'blank = CLI default' : 'model id' });
-  const prompt = h('textarea', null, site.systemPrompt);
-  prompt.value = site.systemPrompt;
-  const refreshList = () => loadModels(provider.value, list);
-  provider.addEventListener('change', refreshList);
-  model.addEventListener('focus', refreshList, { once: true });
-
-  const strict = h('input', { type: 'checkbox', checked: site.strict || null });
-  const fallback = h('input', { value: site.fallback, placeholder: 'Reply when the answer is not in the knowledge' });
+function accessPanel(site) {
   const s = site.stats;
-  const details = h('details', { class: 'site ' + site.provider + (site.disabled ? ' off' : ''), open: open.has(site.id) || null },
-    h('summary', null,
-      h('span', { class: 'name' }, site.id),
-      h('span', { class: 'pill ' + (site.disabled ? 'off' : 'on') }, site.disabled ? 'disabled' : 'active'),
-      h('span', { class: 'pill tone-' + site.provider }, (PROVIDERS.find(([p]) => p === site.provider) || [0, site.provider])[1]),
-      h('span', { class: 'meta' }, `${site.model || (isCli(site.provider) ? 'CLI default' : 'no model')} · token …${site.tokenHint || '????'}`),
-      h('span', { class: 'meta' }, s.requests ? `${s.requests} req · ${s.errors} err` + (s.lastErrorCode ? ` · last: ${s.lastErrorCode}` : '') : 'no requests yet')),
-    h('div', { class: 'body' },
-      h('div', { class: 'row' }, field('Provider', provider), field('Model', model), list),
-      h('div', null, h('label', null, 'Instructions (system prompt)'), prompt),
-      knowledgeBlock(site, strict, fallback),
-      h('div', { class: 'actions mt' },
-        h('button', { class: 'primary', type: 'button', onclick: () => run(() => api('/sites/' + site.id, 'PUT', { provider: provider.value, model: model.value, systemPrompt: prompt.value, strict: strict.checked, fallback: fallback.value }).then(refresh), 'Saved ' + site.id) }, 'Save'),
-        h('button', { type: 'button', onclick: () => run(async () => {
-          const r = await api('/sites/' + site.id + '/test', 'POST');
-          notice = r.ok ? { kind: 'ok', text: `${site.id}: model replied “${r.reply}” (${r.model})` } : { kind: 'err', text: `${site.id}: test failed — ${words(r.error)}` };
-          await refresh();
-        }) }, 'Test'),
-        h('button', { type: 'button', onclick: () => run(() => api('/sites/' + site.id, 'PUT', { disabled: !site.disabled }).then(refresh), (site.disabled ? 'Enabled ' : 'Disabled ') + site.id) }, site.disabled ? 'Enable' : 'Disable'),
-        h('button', { type: 'button', onclick: async () => {
-          if (!confirm(`Rotate token for ${site.id}? The current token stops working.`)) return;
-          await run(async () => { const r = await api('/sites/' + site.id + '/rotate', 'POST'); notice = { kind: 'ok', text: `New token for ${site.id} (shown once):`, secret: r.token }; await refresh(); });
-        } }, 'Rotate token'),
-        h('button', { class: 'danger', type: 'button', onclick: async () => {
-          if (!confirm(`Delete site ${site.id}? Its token stops working immediately.`)) return;
-          open.delete(site.id);
-          await run(() => api('/sites/' + site.id, 'DELETE').then(refresh), 'Deleted ' + site.id);
-        } }, 'Delete'))));
-  details.addEventListener('toggle', () => { details.open ? open.add(site.id) : open.delete(site.id); });
-  return details;
+  return [
+    h('div', { class: 'facts' },
+      h('div', null, h('label', null, 'Server URL'), h('code', null, location.origin)),
+      h('div', null, h('label', null, 'Site id'), h('code', null, site.id)),
+      h('div', null, h('label', null, 'Token'), h('code', null, '…' + (site.tokenHint || '????'))),
+      h('div', null, h('label', null, 'Since last restart'), h('span', null, s.requests ? `${s.requests} requests · ${s.errors} errors` + (s.lastErrorCode ? ` · last: ${s.lastErrorCode}` : '') : 'no requests yet'))),
+    h('div', { class: 'actions mt' },
+      h('button', { class: 'primary', type: 'button', onclick: () => run(async () => {
+        const r = await api('/sites/' + site.id + '/test', 'POST');
+        notice = r.ok ? { kind: 'ok', text: `${site.id}: model replied “${r.reply}” (${r.model})` } : { kind: 'err', text: `${site.id}: test failed — ${words(r.error)}` };
+        await refresh();
+      }) }, 'Test'),
+      h('button', { type: 'button', onclick: () => run(() => api('/sites/' + site.id, 'PUT', { disabled: !site.disabled }).then(refresh), (site.disabled ? 'Enabled ' : 'Disabled ') + site.id) }, site.disabled ? 'Enable' : 'Disable'),
+      h('button', { type: 'button', onclick: async () => {
+        if (!confirm(`Rotate token for ${site.id}? The current token stops working.`)) return;
+        await run(async () => { const r = await api('/sites/' + site.id + '/rotate', 'POST'); notice = { kind: 'ok', text: `New token for ${site.id} (shown once):`, secret: r.token }; await refresh(); });
+      } }, 'Rotate token'),
+      h('button', { class: 'danger', type: 'button', onclick: async () => {
+        if (!confirm(`Delete site ${site.id}? Its token stops working immediately.`)) return;
+        sel = { id: null, section: 'general', add: false };
+        await run(() => api('/sites/' + site.id, 'DELETE').then(refresh), 'Deleted ' + site.id);
+      } }, 'Delete'))
+  ];
 }
 
-function addSiteForm() {
+function addPanel() {
   const id = h('input', { placeholder: 'site-id', pattern: '[a-z0-9][a-z0-9_\\-]{1,63}', required: true });
-  const provider = h('select', null, ...PROVIDERS.map(([p, label]) => h('option', { value: p }, label)));
-  const list = h('datalist', { id: 'models-new' });
-  const model = h('input', { placeholder: 'blank = CLI default (API: model id)', list: 'models-new' });
-  const refreshList = () => loadModels(provider.value, list);
-  provider.addEventListener('change', refreshList);
-  model.addEventListener('focus', refreshList);
-  const prompt = h('textarea', { placeholder: 'System prompt (optional)' });
-  return h('form', { onsubmit: (e) => {
+  const { provider, model, list } = modelPicker(null);
+  const prompt = h('textarea', { placeholder: 'Instructions (optional, can be added later)', rows: 5 });
+  return [h('form', { onsubmit: (e) => {
     e.preventDefault();
     run(async () => {
       const r = await api('/sites', 'POST', { id: id.value.trim(), provider: provider.value, model: model.value.trim(), systemPrompt: prompt.value });
-      open.add(r.site.id);
+      sel = { id: r.site.id, section: 'access', add: false };
+      treeOpen.add(r.site.id);
       notice = { kind: 'ok', text: `Site ${r.site.id} created. Token (shown once):`, secret: r.token };
       await refresh();
     });
   } },
     h('div', { class: 'row' }, field('Site id', id), field('Provider', provider), field('Model', model), list),
     h('div', null, prompt),
-    h('div', { class: 'actions mt' }, h('button', { class: 'primary', type: 'submit', disabled: !state.storage || null }, 'Add site')));
+    h('div', { class: 'actions mt' }, h('button', { class: 'primary', type: 'submit', disabled: !state.storage || null }, 'Create site')))];
 }
 
-/* ---------- subscription CLIs ---------- */
+/* ---------- left-hand tree ---------- */
+function treeNode(site) {
+  const here = !sel.add && sel.id === site.id;
+  const opened = treeOpen.has(site.id);
+  return h('div', { class: 'tnode' },
+    h('button', { type: 'button', class: 'tparent' + (here ? ' on' : ''), onclick: () => {
+      if (here && opened) treeOpen.delete(site.id); else treeOpen.add(site.id);
+      sel = { id: site.id, section: here ? sel.section : 'general', add: false };
+      render();
+    } },
+      h('span', { class: 'caret' }, opened ? '▾' : '▸'),
+      h('span', { class: 'dot tone-' + site.provider + (site.disabled ? ' off' : '') }),
+      h('span', { class: 'tname' }, site.id),
+      site.disabled ? h('span', { class: 'pill off' }, 'off') : null),
+    opened ? h('div', { class: 'tkids' }, SECTIONS.map(([key, label]) => h('button', { type: 'button', class: 'tchild' + (here && sel.section === key ? ' on' : ''), onclick: () => { sel = { id: site.id, section: key, add: false }; render(); } },
+      label, key === 'knowledge' && site.knowledge.length ? h('span', { class: 'count' }, site.knowledge.length) : null))) : null);
+}
+
 function cliRow(name, label, how, field, build) {
   const info = cli && cli[name];
   const input = h(field === 'claudeToken' ? 'input' : 'textarea', field === 'claudeToken'
@@ -262,12 +292,21 @@ function tiles() {
 }
 
 function sitesTab() {
-  const add = h('details', { class: 'add' }, h('summary', null, '+ Add site'), h('div', null, addSiteForm()));
-  return [
-    h('section', { class: 'card' }, h('h2', null, h('span', { class: 'grow' }, 'Sites'), h('span', { class: 'pill' }, location.origin)),
-      state.sites.length ? state.sites.map(siteCard) : h('div', { class: 'empty' }, 'No sites yet.'),
-      add)
-  ];
+  if (!sel.add && !state.sites.some((x) => x.id === sel.id)) {
+    if (state.sites.length) { sel = { id: state.sites[0].id, section: 'general', add: false }; treeOpen.add(sel.id); }
+    else sel = { id: null, section: 'general', add: true };
+  }
+  const site = state.sites.find((x) => x.id === sel.id);
+  const tree = h('nav', { class: 'tree' },
+    h('button', { type: 'button', class: 'tadd' + (sel.add ? ' on' : ''), onclick: () => { sel = { id: sel.id, section: sel.section, add: true }; render(); } }, '+ Add site'),
+    ...state.sites.map(treeNode),
+    state.sites.length ? null : h('div', { class: 'empty' }, 'No sites yet.'));
+  const panel = sel.add ? addPanel()
+    : [h('h2', null, h('span', { class: 'grow' }, `${site.id} · ${(SECTIONS.find(([k]) => k === sel.section) || [0, ''])[1]}`),
+        h('span', { class: 'pill ' + (site.disabled ? 'off' : 'on') }, site.disabled ? 'disabled' : 'active'),
+        h('span', { class: 'pill tone-' + site.provider }, providerLabel(site.provider))),
+      ...(sel.section === 'knowledge' ? knowledgePanel(site) : sel.section === 'access' ? accessPanel(site) : generalPanel(site))];
+  return [h('div', { class: 'split' }, tree, h('section', { class: 'card panel' }, ...(sel.add ? [h('h2', null, 'Add site'), ...panel] : panel)))];
 }
 
 const openSections = new Set();   // collapsible cards the user has expanded (collapsed by default)

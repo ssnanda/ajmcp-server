@@ -122,3 +122,29 @@ details.fold > .grid2 { padding: 0 14px 14px; }
 .doc .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 label.check { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; }
 label.check input { width: auto; min-height: 0; }
+
+/* sites: tree on the left, panel on the right */
+.split { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 14px; align-items: start; }
+.split .panel { margin: 0; min-width: 0; }
+.split .panel h3 { font-size: 14px; margin: 0 0 8px; display: flex; gap: 8px; align-items: center; }
+.tree { position: sticky; top: 8px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 8px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 2px; }
+.tree button { width: 100%; text-align: left; border: 0; background: transparent; border-radius: 8px; padding: 8px 10px; display: flex; align-items: center; gap: 8px; min-height: 38px; }
+.tree button:hover { background: var(--field); }
+.tree button.on { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font-weight: 600; }
+.tadd { color: var(--accent); font-weight: 600; margin-bottom: 4px; }
+.tparent { font-weight: 600; }
+.tparent .tname { flex: 1; overflow-wrap: anywhere; }
+.caret { width: 12px; color: var(--muted); font-size: 11px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+.dot.tone-anthropic { background: var(--orange); } .dot.tone-openai { background: var(--green); }
+.dot.tone-claude-cli { background: var(--violet); } .dot.tone-codex-cli { background: var(--teal); }
+.dot.off { opacity: .35; }
+.tkids { margin: 0 0 4px 17px; padding-left: 10px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 1px; }
+.tchild { font-size: 13px; min-height: 34px; }
+.tchild .count { margin-left: auto; font-size: 11px; background: var(--field); border: 1px solid var(--line); border-radius: 10px; padding: 0 7px; color: var(--muted); }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.facts code { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+@media (max-width: 720px) {
+  .split { grid-template-columns: 1fr; }
+  .tree { position: static; max-height: 46vh; overflow: auto; }
+}
