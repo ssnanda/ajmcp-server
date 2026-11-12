@@ -13,6 +13,7 @@ import { createAdmin, Stats } from './admin.js';
 import { handleSiteApi } from './siteapi.js';
 import { runAssistantTurn } from './assistant.js';
 import { SettingsStore } from './store.js';
+import { ActivityLog } from './activity.js';
 
 function json(res, status, data, requestId) {
   if (res.headersSent) return;
@@ -90,18 +91,20 @@ function chatContext(body, sessionId) {
 export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAgent, mcpHandler = handleMcp, toolVersions = installedToolVersions, store = new SettingsStore(config) } = {}) {
   const limiter = new Limiter(config);
   const stats = new Stats();
+  const activity = new ActivityLog();
   const leadLimiter = new LeadLimiter();
   const convs = new ConversationStore(config.dataDir);
   convs.load();
   // The admin UI exists only when ADMIN_USER / ADMIN_PASSWORD_HASH are configured (see DATA_DIR).
   const admin = config.adminUser
-    ? createAdmin({ config, store, stats, fetchFn, readBody })
+    ? createAdmin({ config, store, stats, activity, fetchFn, readBody })
     : null;
   return http.createServer(async (req, res) => {
     const id = randomUUID();
     const start = Date.now();
     const path = new URL(req.url || '/', 'http://localhost').pathname;
     let status = 500;
+    const note = {};   // what to remember about this request (no message text, no secrets)
     try {
       // Health probes reach the pod using its internal IP/Host, not the public OpenShift Route.
       // No secrets or tenant information are exposed by these probe endpoints.
@@ -117,9 +120,10 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
         await admin(req, res, path);
         status = res.statusCode; return;
       }
-      if (!validateHost(req, config)) { status = 403; return json(res, status, { error: 'untrusted_origin_or_host' }, id); }
+      if (!validateHost(req, config)) { status = 403; note.error = 'untrusted_origin_or_host'; note.host = String(req.headers.host || ''); return json(res, status, { error: 'untrusted_origin_or_host' }, id); }
       const identity = identityForBearer(req.headers.authorization, config);
-      if (!identity) { status = 401; return json(res, status, { error: 'unauthorized' }, id); }
+      if (!identity) { status = 401; note.error = req.headers.authorization ? 'bad_or_disabled_token' : 'no_token'; return json(res, status, { error: 'unauthorized' }, id); }
+      note.site = identity.id; note.via = identity.via;
 
       if (path === '/mcp' && ['POST', 'GET', 'DELETE'].includes(req.method)) {
         const site = authorizeSite(identity);
@@ -152,8 +156,11 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
         const site = authorizeSite(identity);
         if (!site) { status = 403; return json(res, status, { error: 'site_token_required' }, id); }
         const body = await readBody(req, config.maxRequestBytes);
+        note.channel = body && body.channel === 'sms' ? 'sms' : 'chat';
+        if (body && Number.isSafeInteger(body.sessionId)) note.sessionId = body.sessionId;
+        if (body && typeof body.message === 'string') note.chars = body.message.length;
         const slot = limiter.acquire(identity);
-        if (!slot.ok) { status = slot.status; return json(res, status, { error: slot.code }, id); }
+        if (!slot.ok) { status = slot.status; note.error = slot.code; return json(res, status, { error: slot.code }, id); }
         try {
           const ajcore = path === '/v1/ajcore/reply' ? prepareAjcoreChat(body, config) : null;
           if (!ajcore && (!body || typeof body !== 'object' || Array.isArray(body))) throw new InputError('invalid_request');
@@ -169,6 +176,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
           catch (error) { stats.fail(site.id, error.code || error.message); throw error; }
           stats.ok(site.id);
           status = 200;
+          note.assistant = reply.assistant || site.id; note.routedFrom = reply.routed && reply.routed.from; note.provider = reply.provider;
           return json(res, status, {
             requestId: id, site: site.id,
             ...(ajcore ? { sessionId: ajcore.sessionId, reply: reply.text, senderName: 'AJMCP AI' } : { reply: reply.text }),
@@ -213,11 +221,15 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
           'agent_workspace_unavailable', 'agent_timeout', 'agent_unavailable', 'agent_failed',
           'agent_output_too_large', 'agent_empty_output'].includes(error.message) ? error.message
         : 'internal_error';
+      note.error = note.error || message;
       return json(res, status, { error: message, requestId: id }, id);
     } finally {
       // No message text or credentials in logs.
-      console.info(JSON.stringify({ t: new Date().toISOString(), requestId: id, method: req.method,
-        route: path, status: res.statusCode || status, durationMs: Date.now() - start }));
+      const entry = { t: new Date().toISOString(), requestId: id, method: req.method, route: path, status: res.statusCode || status, ms: Date.now() - start, ...note };
+      console.info(JSON.stringify({ t: entry.t, requestId: id, method: req.method, route: path, status: entry.status, durationMs: entry.ms,
+        site: note.site, channel: note.channel, sessionId: note.sessionId, error: note.error }));
+      // Probe and admin-page traffic would only add noise.
+      if (!path.startsWith('/health/') && !path.startsWith('/admin')) activity.add(entry);
     }
   });
 }

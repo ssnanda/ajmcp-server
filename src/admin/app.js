@@ -4,7 +4,7 @@ let state = null;
 let cli = null;             // installed CLI versions + login state
 const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)']];
 const isCli = (p) => p.endsWith('-cli');
-const TABS = [['sites', 'Assistants'], ['logins', 'Logins & keys'], ['account', 'Account']];
+const TABS = [['sites', 'Assistants'], ['activity', 'Activity'], ['logins', 'Logins & keys'], ['account', 'Account']];
 let tab = TABS.some(([k]) => '#' + k === location.hash) ? location.hash.slice(1) : 'sites';
 let notice = null;           // { kind: 'err'|'ok', text, secret? }
 const models = {};           // provider -> [ids]
@@ -515,12 +515,68 @@ function loginsTab() {
   ];
 }
 
+/* ---------- Activity: did the request reach the server, and what happened ---------- */
+const activity = { entries: [], since: null, problems: false, auto: true, loaded: false, timer: null, error: '' };
+
+async function loadActivity() {
+  try {
+    const d = await api('/activity' + (activity.problems ? '?problems=1' : ''));
+    activity.entries = d.entries || []; activity.since = d.since; activity.error = '';
+  } catch (e) { if (e.message !== 'signed out') activity.error = e.message; }
+  activity.loaded = true;
+  if (tab === 'activity' && state) render();
+}
+
+function ensureActivityTimer() {
+  if (activity.timer) return;
+  activity.timer = setInterval(() => {
+    if (tab !== 'activity' || !state) { clearInterval(activity.timer); activity.timer = null; return; }
+    if (activity.auto) loadActivity();
+  }, 5000);
+}
+
+const ROUTE_NAMES = { '/v1/ajcore/reply': 'chat / text reply', '/v1/chat': 'chat', '/v1/assistant': 'assistant', '/mcp': 'mcp', '/v1/agents/run': 'agent' };
+const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const took = (ms) => (ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
+
+function activityTab() {
+  if (!activity.loaded) loadActivity();
+  ensureActivityTimer();
+  const rows = activity.entries.map((e) => {
+    const bad = e.status >= 400 || e.error;
+    const who = e.assistant && e.assistant !== e.site ? `${e.site} → ${e.assistant}` : (e.site || '—');
+    return h('tr', { class: bad ? 'bad' : '' },
+      h('td', null, clock(e.t)),
+      h('td', null, who, e.via && e.via !== 'primary' ? h('span', { class: 'meta' }, ' · ' + e.via) : null),
+      h('td', null, ROUTE_NAMES[e.route] || e.route, e.channel ? h('span', { class: 'meta' }, ' · ' + e.channel) : null),
+      h('td', null, e.sessionId != null ? '#' + e.sessionId : '—', e.chars != null ? h('span', { class: 'meta' }, ` · ${e.chars} chars`) : null),
+      h('td', null, h('span', { class: 'pill ' + (bad ? 'bad' : 'on') }, String(e.status))),
+      h('td', null, took(e.ms)),
+      h('td', null, e.error ? words(e.error) + (e.host ? ` (${e.host})` : '') : (e.provider || 'ok')));
+  });
+  const last = activity.entries[0];
+  return [h('section', { class: 'card' },
+    h('h2', null, h('span', { class: 'grow' }, 'Recent requests'),
+      activity.since ? h('span', { class: 'meta' }, 'since server start ' + new Date(activity.since).toLocaleString()) : null),
+    h('div', { class: 'actions' },
+      h('button', { type: 'button', onclick: () => loadActivity() }, 'Refresh'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: activity.auto || null, onchange: (e) => { activity.auto = e.target.checked; } }), ' Auto-refresh'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: activity.problems || null, onchange: (e) => { activity.problems = e.target.checked; loadActivity(); } }), ' Problems only'),
+      h('span', { class: 'meta' }, last ? `Last request ${clock(last.t)}` : '')),
+    activity.error ? h('div', { class: 'notice err mt' }, activity.error) : null,
+    rows.length
+      ? h('div', { class: 'tblwrap mt' }, h('table', { class: 'tbl' },
+          h('thead', null, h('tr', null, ['Time', 'Assistant', 'Request', 'Session', 'Status', 'Took', 'Result'].map((c) => h('th', null, c)))),
+          h('tbody', null, rows)))
+      : h('div', { class: 'empty mt' }, activity.loaded ? 'No requests yet. If a chat message or text was sent and nothing appears here, it never reached this server.' : 'Loading…'))];
+}
+
 function accountTab() {
   return [h('section', { class: 'card' }, h('h2', null, 'Admin password'), passwordForm())];
 }
 
 function render() {
-  const body = { sites: sitesTab, logins: loginsTab, account: accountTab }[tab]();
+  const body = { sites: sitesTab, activity: activityTab, logins: loginsTab, account: accountTab }[tab]();
   app.replaceChildren(...[
     h('header', { class: 'topbar' },
       h('h1', null, 'AJMCP Admin'), h('span', { class: 'who' }, `v${state.version} · ${state.user}`),

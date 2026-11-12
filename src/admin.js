@@ -72,7 +72,7 @@ function readCookie(req, name) {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function createAdmin({ config, store, stats, fetchFn = fetch, readBody }) {
+export function createAdmin({ config, store, stats, activity, fetchFn = fetch, readBody }) {
   // Sessions survive restarts and deploys: they are kept (hashed) in DATA_DIR/sessions.json. Each one is
   // tied to the current admin password, so a password change or --reset-admin signs everything out.
   const sha = (value) => createHash('sha256').update(String(value)).digest('hex');
@@ -206,6 +206,10 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
     }
     if (method === 'GET' && path === '/admin/api/state') return send(res, 200, stateView());
     if (method === 'GET' && path === '/admin/api/cli') return send(res, 200, await cliStatus(config));
+    if (method === 'GET' && path === '/admin/api/activity') {
+      const query = new URL(req.url || '/', 'http://localhost').searchParams;
+      return send(res, 200, { since: activity ? activity.since : null, entries: activity ? activity.list({ limit: 200, problemsOnly: query.get('problems') === '1' }) : [] });
+    }
     if (method === 'GET' && path === '/admin/api/models') {
       const provider = new URL(req.url, 'http://localhost').searchParams.get('provider') || '';
       return send(res, 200, { models: await listModels(provider) });

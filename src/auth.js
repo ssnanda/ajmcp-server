@@ -23,8 +23,10 @@ export function identityForBearer(header, config) {
     const hashes = [site.tokenHash ? Buffer.from(site.tokenHash, 'hex') : sha(site.token || '')];
     for (const extra of site.tokens || []) hashes.push(Buffer.from(String(extra.tokenHash), 'hex'));
     let hit = false;
-    for (const expected of hashes) if (expected.length === candidateHash.length && timingSafeEqual(candidateHash, expected)) hit = true;
-    if (hit && !site.disabled) matched = { kind: 'site', id: site.id, site };
+    let which = -1;
+    hashes.forEach((expected, index) => { if (expected.length === candidateHash.length && timingSafeEqual(candidateHash, expected)) { hit = true; which = index; } });
+    // `via` says which of the site's tokens was used (for the admin activity list); never the token itself.
+    if (hit && !site.disabled) matched = { kind: 'site', id: site.id, site, via: which <= 0 ? 'primary' : String(site.tokens[which - 1]?.label || 'token').slice(0, 40) };
   }
   return matched;
 }
