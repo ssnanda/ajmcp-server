@@ -228,8 +228,8 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
       const entry = { t: new Date().toISOString(), requestId: id, method: req.method, route: path, status: res.statusCode || status, ms: Date.now() - start, ...note };
       console.info(JSON.stringify({ t: entry.t, requestId: id, method: req.method, route: path, status: entry.status, durationMs: entry.ms,
         site: note.site, channel: note.channel, sessionId: note.sessionId, error: note.error }));
-      // Probe and admin-page traffic would only add noise.
-      if (!path.startsWith('/health/') && !path.startsWith('/admin')) activity.add(entry);
+      // Only the API routes matter here; browser page loads, favicon and probes would only add noise.
+      if (path.startsWith('/v1/') || path === '/mcp') activity.add(entry);
     }
   });
 }
