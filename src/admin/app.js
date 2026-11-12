@@ -560,6 +560,10 @@ function activityTab() {
       activity.since ? h('span', { class: 'meta' }, 'since server start ' + new Date(activity.since).toLocaleString()) : null),
     h('div', { class: 'actions' },
       h('button', { type: 'button', onclick: () => loadActivity() }, 'Refresh'),
+      h('button', { type: 'button', class: 'danger', disabled: activity.entries.length ? null : true, onclick: async () => {
+        try { await api('/activity', 'DELETE'); activity.entries = []; } catch (e) { if (e.message !== 'signed out') activity.error = e.message; }
+        render();
+      } }, 'Clear'),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: activity.auto || null, onchange: (e) => { activity.auto = e.target.checked; } }), ' Auto-refresh'),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: activity.problems || null, onchange: (e) => { activity.problems = e.target.checked; loadActivity(); } }), ' Problems only'),
       h('span', { class: 'meta' }, last ? `Last request ${clock(last.t)}` : '')),

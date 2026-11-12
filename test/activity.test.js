@@ -18,3 +18,10 @@ test('newest first, capped, and problems filter', () => {
   assert.deepEqual(log.list({ problemsOnly: true }).map((e) => e.route), ['/r4']);
   assert.equal(log.list({ limit: 1 }).length, 1);
 });
+
+test('clear empties the list', () => {
+  const log = new ActivityLog();
+  log.add({ route: '/v1/chat', status: 200 });
+  log.clear();
+  assert.equal(log.list().length, 0);
+});

@@ -16,6 +16,8 @@ export class ActivityLog {
     if (this.items.length > this.max) this.items.shift();
   }
 
+  clear() { this.items = []; }
+
   /** Newest first. `problemsOnly` keeps entries that failed (status >= 400 or an error code). */
   list({ limit = 100, problemsOnly = false } = {}) {
     const rows = [];

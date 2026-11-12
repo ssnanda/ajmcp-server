@@ -206,6 +206,7 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
     }
     if (method === 'GET' && path === '/admin/api/state') return send(res, 200, stateView());
     if (method === 'GET' && path === '/admin/api/cli') return send(res, 200, await cliStatus(config));
+    if (method === 'DELETE' && path === '/admin/api/activity') { if (activity) activity.clear(); return send(res, 200, { ok: true }); }
     if (method === 'GET' && path === '/admin/api/activity') {
       const query = new URL(req.url || '/', 'http://localhost').searchParams;
       return send(res, 200, { since: activity ? activity.since : null, entries: activity ? activity.list({ limit: 200, problemsOnly: query.get('problems') === '1' }) : [] });
