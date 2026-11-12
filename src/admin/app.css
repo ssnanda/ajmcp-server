@@ -173,3 +173,17 @@ label.check input { width: auto; min-height: 0; }
 .kn h3 { font-size: 14px; margin: 0 0 8px; display: flex; gap: 8px; align-items: center; }
 .kn-side > h3:not(:first-child) { margin-top: 16px; }
 @media (min-width: 980px) { .kn { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); align-items: start; } }
+
+/* Tests tab */
+.tt-row { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-top: 10px; background: var(--card); }
+.tt-q { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.tt-q .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.tt-n { min-width: 22px; height: 22px; display: inline-grid; place-items: center; border-radius: 11px; background: var(--field); border: 1px solid var(--line); font-size: 12px; }
+.tt-cols { display: grid; grid-template-columns: 1fr; gap: 10px; margin-top: 8px; }
+@media (min-width: 760px) { .tt-cols { grid-template-columns: 1fr 1fr; } }
+.tt-expected, .tt-actual { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); overflow-wrap: anywhere; min-height: 38px; }
+.tt-actual.idle { color: var(--muted); }
+.tt-actual.run { border-color: var(--accent); font-weight: 600; }
+.tt-actual.ok { border-color: var(--green); }
+.tt-actual.err { border-color: var(--red); color: var(--red); }
+.tt-actual .reply { white-space: pre-wrap; margin-top: 2px; }

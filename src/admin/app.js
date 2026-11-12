@@ -85,7 +85,7 @@ async function loadModels(provider, datalist) {
 
 const kb = (chars) => chars >= 1000 ? Math.round(chars / 1000) + ' KB' : chars + ' chars';
 const providerLabel = (p) => (PROVIDERS.find(([k]) => k === p) || [0, p])[1];
-const SECTIONS = [['general', 'AI Behavior'], ['knowledge', 'Knowledge'], ['leads', 'Leads'], ['access', 'Access']];
+const SECTIONS = [['general', 'AI Behavior'], ['knowledge', 'Knowledge'], ['tests', 'Tests'], ['leads', 'Leads'], ['access', 'Access']];
 
 // Tree selection: which site and which part of it is shown on the right.
 let sel = { id: null, section: 'general', add: false };
@@ -229,6 +229,90 @@ async function askTest(site, q) {
   if (state) render();
 }
 
+/* ---------- Tests: upload a test-texts file; Expected is filled in, Actual waits for Ask ---------- */
+// Accepts the ChatGPT format:  1. Customer: "text"  /  Expected: what should happen.  (also "Q:" and unnumbered blocks)
+function parseTests(raw) {
+  const text = String(raw).replace(/\r\n/g, '\n').replace(/^﻿/, '');
+  let blocks = text.split(/\n(?=\s*\d+[.)]\s)/).map((b) => (/^\s*\d+[.)]\s*([\s\S]*)$/.exec(b.trim()) || [])[1]).filter(Boolean);
+  if (!blocks.length) blocks = text.split(/\n\s*\n/).filter((b) => /expected\s*:/i.test(b));
+  const out = [];
+  for (const body of blocks) {
+    const m = /(^|\n)\s*Expected\s*:\s*/i.exec(body);
+    const q = (m ? body.slice(0, m.index) : body).replace(/^\s*(Customer|Q|Question|Text)\s*:\s*/i, '').trim().replace(/^["“”']+|["“”']+$/g, '').trim();
+    const expected = m ? body.slice(m.index + m[0].length).replace(/\s+/g, ' ').trim() : '';
+    if (q) out.push({ question: q, expected });
+  }
+  return out;
+}
+
+const testResults = {};   // 'site:testId' -> { sid, tid, startedAt, endedAt?, ok?, reply?, error? }
+let testsTicker = null;
+const actId = (sid, tid) => `act-${sid}-${tid}`;
+
+function fillActual(el, r) {
+  el.replaceChildren();
+  el.className = 'tt-actual ' + (!r ? 'idle' : !r.endedAt ? 'run' : r.ok ? 'ok' : 'err');
+  if (!r) { el.append('Waiting — click Ask'); return; }
+  if (!r.endedAt) { el.append(h('span', { class: 'spin' }), ` Thinking… ${secs(Date.now() - r.startedAt)}`); return; }
+  el.append(h('div', { class: 'meta' }, `${r.ok ? 'Answered' : 'Failed'} in ${secs(r.endedAt - r.startedAt)}`), h('div', { class: 'reply' }, r.ok ? r.reply : words(r.error)));
+}
+function repaintActual(r) { const el = document.getElementById(actId(r.sid, r.tid)); if (el) fillActual(el, r); }
+function ensureTicker() {
+  if (testsTicker) return;
+  testsTicker = setInterval(() => {
+    const running = Object.values(testResults).filter((r) => !r.endedAt);
+    running.forEach(repaintActual);
+    if (!running.length) { clearInterval(testsTicker); testsTicker = null; }
+  }, 200);
+}
+async function askTestRow(site, t) {
+  const key = `${site.id}:${t.id}`;
+  if (testResults[key] && !testResults[key].endedAt) return;
+  const r = (testResults[key] = { sid: site.id, tid: t.id, startedAt: Date.now() });
+  repaintActual(r); ensureTicker();
+  try {
+    const out = await api('/sites/' + site.id + '/test', 'POST', { question: t.question });
+    Object.assign(r, { endedAt: Date.now(), ok: !!out.ok, reply: out.reply, error: out.error });
+  } catch (e) { Object.assign(r, { endedAt: Date.now(), ok: false, error: e.message }); }
+  repaintActual(r);
+}
+
+function testsPanel(site) {
+  const tests = site.tests || [];
+  const file = h('input', { type: 'file', accept: '.txt,.md,text/*' });
+  file.addEventListener('change', async () => {
+    const f = file.files[0];
+    if (!f) return;
+    if (f.size > 200_000) { notice = { kind: 'err', text: 'file too large (200 KB max)' }; render(); return; }
+    const parsed = parseTests(await f.text());
+    if (!parsed.length) { notice = { kind: 'err', text: 'no tests found: use "1. Customer: … / Expected: …"' }; render(); return; }
+    if (parsed.length > 30) { notice = { kind: 'err', text: `${parsed.length} tests found, 30 max` }; render(); return; }
+    Object.keys(testResults).filter((k) => k.startsWith(site.id + ':')).forEach((k) => delete testResults[k]);
+    run(() => api('/sites/' + site.id, 'PUT', { tests: parsed }).then(refresh), `Loaded ${parsed.length} tests`);
+  });
+  const rows = tests.length ? tests.map((t) => {
+    const actual = h('div', { id: actId(site.id, t.id) });
+    fillActual(actual, testResults[`${site.id}:${t.id}`]);
+    return h('div', { class: 'tt-row' },
+      h('div', { class: 'tt-q' }, h('span', { class: 'tt-n' }, t.id), h('span', { class: 'grow' }, t.question),
+        h('button', { type: 'button', class: 'primary', onclick: () => askTestRow(site, t) }, 'Ask')),
+      h('div', { class: 'tt-cols' },
+        h('div', null, h('div', { class: 'meta' }, 'Expected'), h('div', { class: 'tt-expected' }, t.expected || '—')),
+        h('div', null, h('div', { class: 'meta' }, 'Actual'), actual)));
+  }) : [h('div', { class: 'empty' }, 'No tests yet. Upload a test-texts file.')];
+  return [
+    h('h3', null, 'Test texts ', h('span', { class: 'pill' }, `${tests.length} tests`)),
+    h('div', { class: 'actions' }, h('div', { class: 'grow' }, file),
+      h('button', { type: 'button', disabled: tests.length ? null : true, onclick: async () => { for (const t of tests) await askTestRow(site, t); } }, 'Ask all'),
+      h('button', { class: 'danger', type: 'button', disabled: tests.length ? null : true, onclick: async () => {
+        if (!confirm('Remove all tests for ' + site.id + '?')) return;
+        Object.keys(testResults).filter((k) => k.startsWith(site.id + ':')).forEach((k) => delete testResults[k]);
+        await run(() => api('/sites/' + site.id, 'PUT', { tests: [] }).then(refresh), 'Tests removed');
+      } }, 'Remove all')),
+    ...rows
+  ];
+}
+
 function leadsPanel(site) {
   const capture = h('input', { type: 'checkbox', checked: site.leadCapture || null });
   const instructions = h('textarea', { rows: 6, placeholder: 'How to qualify visitors for this website (who to ask what, which services, when to offer a follow-up)…' });
@@ -319,7 +403,7 @@ function treeNode(site) {
       h('span', { class: 'tname' }, site.id),
       site.disabled ? h('span', { class: 'pill off' }, 'off') : null),
     opened ? h('div', { class: 'tkids' }, SECTIONS.map(([key, label]) => h('button', { type: 'button', class: 'tchild' + (here && sel.section === key ? ' on' : ''), onclick: () => { sel = { id: site.id, section: key, add: false }; render(); } },
-      label, key === 'knowledge' && site.knowledge.length ? h('span', { class: 'count' }, site.knowledge.length) : null))) : null);
+      label, key === 'knowledge' && site.knowledge.length ? h('span', { class: 'count' }, site.knowledge.length) : key === 'tests' && (site.tests || []).length ? h('span', { class: 'count' }, site.tests.length) : null))) : null);
 }
 
 function cliRow(name, label, how, field, build) {
@@ -403,7 +487,7 @@ function sitesTab() {
     : [h('h2', null, h('span', { class: 'grow' }, `${site.id} · ${(SECTIONS.find(([k]) => k === sel.section) || [0, ''])[1]}`),
         h('span', { class: 'pill ' + (site.disabled ? 'off' : 'on') }, site.disabled ? 'disabled' : 'active'),
         h('span', { class: 'pill tone-' + site.provider }, providerLabel(site.provider))),
-      ...(sel.section === 'knowledge' ? knowledgePanel(site) : sel.section === 'leads' ? leadsPanel(site) : sel.section === 'access' ? accessPanel(site) : generalPanel(site))];
+      ...(sel.section === 'knowledge' ? knowledgePanel(site) : sel.section === 'tests' ? testsPanel(site) : sel.section === 'leads' ? leadsPanel(site) : sel.section === 'access' ? accessPanel(site) : generalPanel(site))];
   return [h('div', { class: 'split' }, tree, h('section', { class: 'card panel' }, ...(sel.add ? [h('h2', null, 'Add assistant'), ...panel] : panel)))];
 }
 

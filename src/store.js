@@ -13,6 +13,13 @@ const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 export const KEY_PROVIDERS = ['openai', 'anthropic'];
 export const PROVIDERS = [...KEY_PROVIDERS, 'claude-cli', 'codex-cli'];
 
+// Saved test texts (question + what we expect), used by the admin "Tests" tab. Small on purpose: admin request bodies are capped.
+function cleanTests(raw) {
+  if (!Array.isArray(raw)) throw new StoreError('invalid_tests');
+  if (raw.length > 30) throw new StoreError('too_many_tests');
+  return raw.map((t, i) => ({ id: String(i + 1), question: String(t?.question ?? '').trim().slice(0, 300), expected: String(t?.expected ?? '').trim().slice(0, 500) })).filter((t) => t.question);
+}
+
 function cleanSite(input, existing = {}) {
   const provider = input.provider ?? existing.provider ?? 'openai';
   const model = String(input.model ?? existing.model ?? '').trim();
@@ -30,7 +37,8 @@ function cleanSite(input, existing = {}) {
   if (!Array.isArray(rawTargets) || rawTargets.length > 10) throw new StoreError('invalid_transfer_targets');
   const transferTargets = [...new Set(rawTargets.map((t) => String(t).trim()))];
   if (!transferTargets.every((t) => ID_RE.test(t))) throw new StoreError('invalid_transfer_targets');
-  return { provider, model, systemPrompt, leadCapture: Boolean(input.leadCapture ?? existing.leadCapture), leadInstructions, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback, routeLabel, transferTargets };
+  const tests = cleanTests(input.tests ?? existing.tests ?? []);
+  return { provider, model, systemPrompt, tests, leadCapture: Boolean(input.leadCapture ?? existing.leadCapture), leadInstructions, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback, routeLabel, transferTargets };
 }
 
 // Normalizes a runtime site (seed file token or stored hash) to the persisted shape. Never keeps a plain token.
@@ -49,6 +57,7 @@ function toStored(site) {
     // Routing: a short description other assistants see, and which assistants this one may pass a customer to.
     routeLabel: site.routeLabel || '',
     transferTargets: Array.isArray(site.transferTargets) ? site.transferTargets.map(String) : [],
+    tests: Array.isArray(site.tests) ? site.tests.map((t) => ({ id: String(t.id), question: String(t.question), expected: String(t.expected || '') })) : [],
     // Extra named access tokens (for example one for AJOps), alongside the primary token above.
     tokens: Array.isArray(site.tokens) ? site.tokens.map((t) => ({ id: String(t.id), label: String(t.label), tokenHash: String(t.tokenHash), tokenHint: String(t.tokenHint || ''), createdAt: t.createdAt || null })) : [],
     leadInstructions: site.leadInstructions || '',
