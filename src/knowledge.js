@@ -55,7 +55,7 @@ export function buildSystemPrompt(site, messages) {
     material = docs.map((d) => `## ${d.title}\n${d.text}`).join('\n\n');
   } else {
     const chosen = pick(docs, messages);
-    if (!chosen.length && strict) return { direct: fallback };
+    if (!chosen.length && strict && !site.leadCapture) return { direct: fallback };
     material = chosen.map((c) => `## ${c.title}\n${c.text}`).join('\n\n');
   }
   const rules = strict

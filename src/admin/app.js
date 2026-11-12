@@ -85,7 +85,11 @@ async function loadModels(provider, datalist) {
 
 const kb = (chars) => chars >= 1000 ? Math.round(chars / 1000) + ' KB' : chars + ' chars';
 const providerLabel = (p) => (PROVIDERS.find(([k]) => k === p) || [0, p])[1];
-const SECTIONS = [['general', 'General'], ['knowledge', 'Knowledge'], ['access', 'Access']];
+const SECTIONS = [['general', 'AI Behavior'], ['knowledge', 'Knowledge'], ['leads', 'Leads'], ['access', 'Access']];
+const leadData = {};   // site id -> last loaded lead list (kept while switching sections)
+const CATEGORY = { cost_conscious: 'Cost-conscious', white_glove: 'White-glove' };
+const human = (v) => String(v || '').replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+const when = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); };
 
 // Tree selection: which site and which part of it is shown on the right.
 let sel = { id: null, section: 'general', add: false };
@@ -162,6 +166,69 @@ function knowledgePanel(site) {
   ];
 }
 
+const loadingLeads = new Set();
+async function loadLeads(site) {
+  if (loadingLeads.has(site.id)) return;
+  loadingLeads.add(site.id);
+  try { leadData[site.id] = await api('/sites/' + site.id + '/leads'); }
+  catch (e) { if (e.message !== 'signed out') leadData[site.id] = { error: e.message }; }
+  finally { loadingLeads.delete(site.id); }
+  if (state && !sel.add && sel.id === site.id && sel.section === 'leads') render();
+}
+
+function leadCard(l) {
+  if (l.unavailable) return h('div', { class: 'lead' }, h('strong', null, 'Lead #' + l.id), h('span', { class: 'meta' }, 'could not be read from AJCore'));
+  return h('div', { class: 'lead' },
+    h('div', { class: 'lead-head' },
+      h('strong', null, l.name || '(no name)'), l.company ? h('span', { class: 'meta' }, l.company) : null,
+      h('span', { class: 'grow' }),
+      h('span', { class: 'pill' }, human(l.leadStatus || 'new')),
+      l.category ? h('span', { class: 'pill tone-' + (l.category === 'white_glove' ? 'claude-cli' : 'openai') }, CATEGORY[l.category] || human(l.category)) : null,
+      l.customerType ? h('span', { class: 'pill' }, human(l.customerType)) : null,
+      h('span', { class: 'pill ' + (l.consent ? 'on' : 'bad') }, l.consent ? 'consent' : 'no consent')),
+    h('div', { class: 'lead-contact' }, [l.email, l.phone, l.contactMethod ? `prefers ${l.contactMethod}` : ''].filter(Boolean).join('  ·  ')),
+    l.services.length ? h('div', { class: 'meta' }, 'Interested in: ' + l.services.map(human).join(', ') + (l.entityStatus ? ' · ' + human(l.entityStatus) : '')) : null,
+    l.summary ? h('div', { class: 'lead-summary' }, l.summary) : null,
+    h('div', { class: 'lead-foot' },
+      h('span', { class: 'meta' }, `${when(l.createdAt)}${l.followUpAt ? ' · follow-up ' + when(l.followUpAt) : ''}${l.noteCount ? ' · ' + l.noteCount + ' notes' : ''} · lead #${l.id}`),
+      l.link ? h('a', { class: 'button-link', href: l.link, target: '_blank', rel: 'noopener noreferrer' }, 'Open in AJCore ↗') : null));
+}
+
+function leadsPanel(site) {
+  const connected = state.ajcore && state.ajcore.configured;
+  const capture = h('input', { type: 'checkbox', checked: site.leadCapture || null });
+  const uuid = h('input', { value: site.ajcoreSiteUuid, placeholder: 'Optional: AJCore site id (blank = the one the website sends)' });
+  const instructions = h('textarea', { rows: 5, placeholder: 'How to qualify visitors for this website (who to ask what, which services, when to offer a follow-up)…' });
+  instructions.value = site.leadInstructions;
+  const data = leadData[site.id];
+  if (!data) loadLeads(site);
+  const counts = data && data.counts;
+  const list = !data ? [h('div', { class: 'empty' }, 'Loading…')]
+    : data.error ? [h('div', { class: 'notice err' }, words(data.error))]
+    : [
+        data.loadError ? h('div', { class: 'notice err' }, 'AJCore could not be read: ' + words(data.loadError)) : null,
+        ...(data.leads.length ? data.leads.map(leadCard) : [h('div', { class: 'empty' }, connected ? 'No leads captured yet.' : 'Connect AJCore (Logins & keys) to capture and view leads.')])
+      ];
+  const failures = data && data.events ? data.events.filter((e) => e.status === 'failed').slice(0, 8) : [];
+  return [
+    h('div', { class: 'facts' },
+      h('div', null, h('label', null, 'AJCore lead integration'), h('span', { class: 'pill ' + (connected ? 'on' : 'off') }, connected ? 'Connected' : 'Needs setup')),
+      h('div', null, h('label', null, 'Capture'), h('span', { class: 'pill ' + (site.leadCapture ? 'on' : 'off') }, site.leadCapture ? 'On' : 'Off'))),
+    h('label', { class: 'check mt' }, capture, ' Capture leads from this chat (the AI asks permission first)'),
+    h('div', { class: 'row mt' }, field('AJCore site', uuid)),
+    h('div', null, h('label', null, 'Qualification instructions'), instructions),
+    h('div', { class: 'actions mt' },
+      h('button', { class: 'primary', type: 'button', onclick: () => run(() => api('/sites/' + site.id, 'PUT', { leadCapture: capture.checked, ajcoreSiteUuid: uuid.value, leadInstructions: instructions.value }).then(refresh), 'Saved ' + site.id) }, 'Save'),
+      h('button', { type: 'button', onclick: () => { delete leadData[site.id]; render(); } }, 'Refresh')),
+    counts ? h('div', { class: 'tiles mt' },
+      tile('green', counts.created, `New leads (${counts.days}d)`), tile('blue', counts.updated, 'Updated'), tile(counts.failed ? 'red' : 'green', counts.failed, 'Failed saves')) : null,
+    h('h3', { class: 'mt' }, 'Captured leads'),
+    ...list,
+    failures.length ? h('h3', { class: 'mt' }, 'Failed saves') : null,
+    ...failures.map((e) => h('div', { class: 'doc' }, h('span', { class: 'grow' }, human(words(e.error))), h('span', { class: 'meta' }, `chat ${e.conversationId || '—'} · ${when(e.time)}`)))
+  ];
+}
+
 function accessPanel(site) {
   const s = site.stats;
   return [
@@ -169,6 +236,7 @@ function accessPanel(site) {
       h('div', null, h('label', null, 'Server URL'), h('code', null, location.origin)),
       h('div', null, h('label', null, 'Site id'), h('code', null, site.id)),
       h('div', null, h('label', null, 'Token'), h('code', null, '…' + (site.tokenHint || '????'))),
+      h('div', null, h('label', null, 'AJCore lead integration'), h('span', { class: 'pill ' + (state.ajcore && state.ajcore.configured ? 'on' : 'off') }, state.ajcore && state.ajcore.configured ? 'Connected' : 'Needs setup')),
       h('div', null, h('label', null, 'Since last restart'), h('span', null, s.requests ? `${s.requests} requests · ${s.errors} errors` + (s.lastErrorCode ? ` · last: ${s.lastErrorCode}` : '') : 'no requests yet'))),
     h('div', { class: 'actions mt' },
       h('button', { class: 'primary', type: 'button', onclick: () => run(async () => {
@@ -307,7 +375,7 @@ function sitesTab() {
     : [h('h2', null, h('span', { class: 'grow' }, `${site.id} · ${(SECTIONS.find(([k]) => k === sel.section) || [0, ''])[1]}`),
         h('span', { class: 'pill ' + (site.disabled ? 'off' : 'on') }, site.disabled ? 'disabled' : 'active'),
         h('span', { class: 'pill tone-' + site.provider }, providerLabel(site.provider))),
-      ...(sel.section === 'knowledge' ? knowledgePanel(site) : sel.section === 'access' ? accessPanel(site) : generalPanel(site))];
+      ...(sel.section === 'knowledge' ? knowledgePanel(site) : sel.section === 'leads' ? leadsPanel(site) : sel.section === 'access' ? accessPanel(site) : generalPanel(site))];
   return [h('div', { class: 'split' }, tree, h('section', { class: 'card panel' }, ...(sel.add ? [h('h2', null, 'Add site'), ...panel] : panel)))];
 }
 
@@ -320,6 +388,28 @@ function collapsible(id, title, summary, ...children) {
   return d;
 }
 
+function ajcoreCard() {
+  const a = state.ajcore || {};
+  const url = h('input', { value: a.url, placeholder: 'https://ncllcagents.com' });
+  const user = h('input', { value: a.username, placeholder: 'Service account user', autocomplete: 'off' });
+  const pass = h('input', { type: 'password', placeholder: a.passwordSet ? 'Saved (leave blank to keep)' : 'Password', autocomplete: 'new-password' });
+  return collapsible('ajcore', 'AJCore (lead capture)',
+    h('span', { class: 'sum' }, h('span', { class: 'pill ' + (a.configured ? 'on' : 'off') }, a.configured ? 'Connected' : 'Needs setup')),
+    h('div', { class: 'sub' },
+      h('div', { class: 'meta' }, 'A staff account with Leads edit access (role aj_ops_user). The password stays on this server.'),
+      h('div', { class: 'row mt' }, field('AJCore site URL', url), field('Username', user), field('Password', pass)),
+      h('div', { class: 'actions' },
+        h('button', { class: 'primary', type: 'button', onclick: () => run(async () => { await api('/ajcore', 'PUT', { url: url.value, username: user.value, password: pass.value }); await refresh(); }, 'AJCore saved') }, 'Save'),
+        h('button', { type: 'button', onclick: () => run(async () => {
+          const r = await api('/ajcore/test', 'POST');
+          notice = r.ok ? { kind: 'ok', text: `AJCore: signed in as ${r.user || 'service account'}` } : { kind: 'err', text: 'AJCore: ' + words(r.error) };
+        }) }, 'Test'),
+        a.url ? h('button', { class: 'danger', type: 'button', onclick: async () => {
+          if (!confirm('Remove the AJCore connection? Lead capture stops working until you add it again.')) return;
+          await run(async () => { await api('/ajcore', 'PUT', { clear: true }); await refresh(); }, 'AJCore removed');
+        } }, 'Remove') : null)));
+}
+
 function loginsTab() {
   const state2 = (i) => !i || !i.version ? 'bad' : i.loggedIn ? 'on' : 'off';
   const keyPill = (p) => h('span', { class: 'pill ' + (state.keys[p].set ? 'on' : 'off') }, p + (state.keys[p].set ? ' ✓' : ' –'));
@@ -329,6 +419,7 @@ function loginsTab() {
       h('div', { class: 'grid2' },
         cliRow('claude', 'Claude', 'On your Mac run: claude setup-token', 'claudeToken'),
         cliRow('codex', 'ChatGPT (Codex)', 'On your Mac run: codex login, then paste ~/.codex/auth.json', 'codexAuth'))),
+    ajcoreCard(),
     collapsible('keys', 'AI provider keys',
       h('span', { class: 'sum' }, keyPill('anthropic'), keyPill('openai')),
       h('div', { class: 'grid2' }, keyRow('anthropic', 'Anthropic'), keyRow('openai', 'OpenAI')))

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { tokenHash } from './auth.js';
 import { LIMITS } from './knowledge.js';
+import { normalizeBase } from './ajcore.js';
 
 export class StoreError extends Error {
   constructor(code, status = 400) { super(code); this.name = 'StoreError'; this.code = code; this.status = status; }
@@ -22,7 +23,11 @@ function cleanSite(input, existing = {}) {
   if (systemPrompt.length > 12000) throw new StoreError('system_prompt_too_long');
   const fallback = String(input.fallback ?? existing.fallback ?? '').trim();
   if (fallback.length > 500) throw new StoreError('fallback_too_long');
-  return { provider, model, systemPrompt, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback };
+  const leadInstructions = String(input.leadInstructions ?? existing.leadInstructions ?? '');
+  if (leadInstructions.length > 4000) throw new StoreError('lead_instructions_too_long');
+  const ajcoreSiteUuid = String(input.ajcoreSiteUuid ?? existing.ajcoreSiteUuid ?? '').trim();
+  if (ajcoreSiteUuid && !/^[A-Za-z0-9-]{8,100}$/.test(ajcoreSiteUuid)) throw new StoreError('invalid_site_uuid');
+  return { provider, model, systemPrompt, leadCapture: Boolean(input.leadCapture ?? existing.leadCapture), leadInstructions, ajcoreSiteUuid, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback };
 }
 
 // Normalizes a runtime site (seed file token or stored hash) to the persisted shape. Never keeps a plain token.
@@ -37,6 +42,9 @@ function toStored(site) {
     disabled: Boolean(site.disabled),
     strict: site.strict !== false,
     fallback: site.fallback || '',
+    leadCapture: Boolean(site.leadCapture),
+    leadInstructions: site.leadInstructions || '',
+    ajcoreSiteUuid: site.ajcoreSiteUuid || '',
     knowledge: Array.isArray(site.knowledge) ? site.knowledge.map((d) => ({ id: String(d.id), title: String(d.title), text: String(d.text), updatedAt: d.updatedAt || null })) : [],
     createdAt: site.createdAt || new Date().toISOString()
   };
@@ -52,7 +60,7 @@ export class SettingsStore {
     this.config = config;
     this.file = config.dataDir ? join(config.dataDir, 'settings.json') : '';
     this.env = { openai: config.openaiApiKey, anthropic: config.anthropicApiKey, claude: config.claudeOauthToken, passwordHash: config.adminPasswordHash };
-    this.state = { sites: undefined, keys: {}, passwordHash: '', passwordBase: '' };
+    this.state = { sites: undefined, keys: {}, passwordHash: '', passwordBase: '', ajcore: {} };
   }
 
   get enabled() { return Boolean(this.file); }
@@ -66,7 +74,8 @@ export class SettingsStore {
       sites: Array.isArray(data.sites) ? data.sites.map(toStored) : undefined,
       keys: { openai: String(data.keys?.openai || ''), anthropic: String(data.keys?.anthropic || ''), claude: String(data.keys?.claude || '') },
       passwordHash: String(data.passwordHash || ''),
-      passwordBase: String(data.passwordBase || '')
+      passwordBase: String(data.passwordBase || ''),
+      ajcore: data.ajcore && typeof data.ajcore === 'object' ? { url: String(data.ajcore.url || ''), username: String(data.ajcore.username || ''), password: String(data.ajcore.password || '') } : {}
     };
     this.apply();
   }
@@ -86,7 +95,7 @@ export class SettingsStore {
     try {
       mkdirSync(this.config.dataDir, { recursive: true });
       const tmp = `${this.file}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ sites: next.sites, keys: next.keys, passwordHash: next.passwordHash, passwordBase: next.passwordBase }, null, 2) + '\n', { mode: 0o600 });
+      writeFileSync(tmp, JSON.stringify({ sites: next.sites, keys: next.keys, passwordHash: next.passwordHash, passwordBase: next.passwordBase, ajcore: next.ajcore }, null, 2) + '\n', { mode: 0o600 });
       renameSync(tmp, this.file);
     } catch (error) {
       if (error instanceof StoreError) throw error;
@@ -172,6 +181,20 @@ export class SettingsStore {
     const key = value === null ? '' : String(value).trim();
     if (key && (key.length < 20 || key.length > 2000 || /\s/.test(key))) throw new StoreError('invalid_api_key');
     this.write({ ...this.state, sites: this.state.sites ?? this.sites(), keys: { ...this.state.keys, [provider]: key } });
+  }
+
+  ajcoreConfig() { return this.state.ajcore || {}; }
+
+  /** AJCore connection used for lead capture. A blank password keeps the saved one; clear = remove everything. */
+  setAjcore(input) {
+    if (input === null) { this.write({ ...this.state, sites: this.state.sites ?? this.sites(), ajcore: {} }); return; }
+    const current = this.ajcoreConfig();
+    const url = normalizeBase(String(input.url || ''));
+    const username = String(input.username || '').trim().slice(0, 100);
+    const password = String(input.password || '') || current.password || '';
+    if (!username) throw new StoreError('username_required');
+    if (!password) throw new StoreError('password_required');
+    this.write({ ...this.state, sites: this.state.sites ?? this.sites(), ajcore: { url, username, password } });
   }
 
   setPasswordHash(hash) {

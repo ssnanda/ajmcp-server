@@ -2,7 +2,11 @@ import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { identityForBearer, authorizeSite } from './auth.js';
 import { Limiter } from './limits.js';
-import { generateReply, InputError } from './provider.js';
+import { InputError } from './provider.js';
+import { runChat } from './chat.js';
+import { AjcoreClient } from './ajcore.js';
+import { LeadLog } from './leadlog.js';
+import { LeadService } from './leads.js';
 import { runAgent, installedToolVersions } from './agents.js';
 import { handleMcp } from './mcp.js';
 import { APP_VERSION } from './version.js';
@@ -60,12 +64,28 @@ function prepareAjcoreChat(body, config) {
   return { sessionId: body.sessionId, messages };
 }
 
-export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAgent, mcpHandler = handleMcp, toolVersions = installedToolVersions, store = new SettingsStore(config) } = {}) {
+/** Facts the plugin passes along with a chat message; all optional, all length-limited. */
+function chatContext(body, sessionId) {
+  const text = (value, max) => (typeof value === 'string' ? value.replace(/[\u0000-\u001f]+/g, ' ').trim().slice(0, max) : '');
+  const page = text(body.page, 300);
+  const visitor = body.visitor && typeof body.visitor === 'object' ? body.visitor : {};
+  const siteUuid = text(body.siteUuid, 100);
+  return {
+    conversationId: sessionId ? String(sessionId) : text(body.conversationId, 64),
+    siteUuid: /^[A-Za-z0-9-]{8,100}$/.test(siteUuid) ? siteUuid : '',
+    page: /^https?:\/\//.test(page) ? page : '',
+    visitor: { name: text(visitor.name, 120), email: text(visitor.email, 254), phone: text(visitor.phone, 30) }
+  };
+}
+
+export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAgent, mcpHandler = handleMcp, toolVersions = installedToolVersions, store = new SettingsStore(config), ajcore, leadLog = new LeadLog(config.dataDir) } = {}) {
   const limiter = new Limiter(config);
   const stats = new Stats();
+  const ajcoreClient = ajcore || new AjcoreClient(() => store.ajcoreConfig(), fetchFn);
+  const leads = new LeadService({ ajcore: ajcoreClient, log: leadLog });
   // The admin UI exists only when ADMIN_USER / ADMIN_PASSWORD_HASH are configured (see DATA_DIR).
   const admin = config.adminUser
-    ? createAdmin({ config, store, stats, fetchFn, readBody })
+    ? createAdmin({ config, store, stats, fetchFn, readBody, ajcore: ajcoreClient, leadLog })
     : null;
   return http.createServer(async (req, res) => {
     const id = randomUUID();
@@ -121,14 +141,15 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
           if (!ajcore && (!body || typeof body !== 'object' || Array.isArray(body))) throw new InputError('invalid_request');
           // Clients cannot choose provider, model, system instructions or another tenant.
           let reply;
-          try { reply = await generateReply(site, ajcore ? ajcore.messages : body.messages, config, fetchFn); }
+          try { reply = await runChat({ site, messages: ajcore ? ajcore.messages : body.messages, context: chatContext(body, ajcore ? ajcore.sessionId : 0), config, fetchFn, leads }); }
           catch (error) { stats.fail(site.id, error.code || error.message); throw error; }
           stats.ok(site.id);
           status = 200;
           return json(res, status, {
             requestId: id, site: site.id,
             ...(ajcore ? { sessionId: ajcore.sessionId, reply: reply.text, senderName: 'AJMCP AI' } : { reply: reply.text }),
-            provider: reply.provider, model: reply.model, usage: reply.usage
+            provider: reply.provider, model: reply.model, usage: reply.usage,
+            ...(reply.lead ? { lead: reply.lead } : {})
           }, id);
         } finally { slot.release(); }
       }
