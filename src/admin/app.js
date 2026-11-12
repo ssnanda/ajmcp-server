@@ -59,15 +59,17 @@ function field(label, control) { return h('div', null, h('label', null, label), 
 function renderLogin(message) {
   const user = h('input', { name: 'username', autocomplete: 'username', required: true, autofocus: true });
   const pass = h('input', { name: 'password', type: 'password', autocomplete: 'current-password', required: true });
+  const remember = h('input', { type: 'checkbox', name: 'remember', checked: true });
   const form = h('form', { onsubmit: async (e) => {
     e.preventDefault();
-    try { await api('/login', 'POST', { username: user.value, password: pass.value }); await refresh(); notice = null; render(); }
+    try { await api('/login', 'POST', { username: user.value, password: pass.value, remember: remember.checked }); await refresh(); notice = null; render(); }
     catch (err) { renderLogin(err.message); }
   } },
     h('h2', null, 'AJMCP Admin'),
     message ? h('div', { class: 'notice err' }, message) : null,
     h('div', { class: 'row' }, field('User', user)),
     h('div', { class: 'row' }, field('Password', pass)),
+    h('label', { class: 'check' }, remember, ' Keep me signed in'),
     h('button', { class: 'primary', type: 'submit' }, 'Sign in'));
   app.replaceChildren(h('section', { class: 'card login' }, form));
 }

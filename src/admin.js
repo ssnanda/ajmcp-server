@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { hashPassword, verifyPassword } from './password.js';
 import { StoreError, KEY_PROVIDERS } from './store.js';
 import { CliError, cliStatus, cliModels, isCliProvider, runCli, saveCodexAuth } from './cli.js';
@@ -16,7 +17,8 @@ const ASSETS = {
 const assetCache = new Map();
 
 const SESSION_COOKIE = 'ajmcp_session';
-const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;          // not remembered: until the browser closes, 12h at most
+const REMEMBER_TTL_MS = 30 * 24 * 60 * 60 * 1000;     // remembered: 30 days, renewed while you keep using it
 const LOGIN_WINDOW_MS = 10 * 60 * 1000;
 const LOGIN_MAX_FAILURES = 8;
 
@@ -71,22 +73,49 @@ function readCookie(req, name) {
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function createAdmin({ config, store, stats, fetchFn = fetch, readBody }) {
+  // Sessions survive restarts and deploys: they are kept (hashed) in DATA_DIR/sessions.json. Each one is
+  // tied to the current admin password, so a password change or --reset-admin signs everything out.
+  const sha = (value) => createHash('sha256').update(String(value)).digest('hex');
+  const pwTag = () => sha(config.adminPasswordHash).slice(0, 16);
+  const sessionFile = config.dataDir ? join(config.dataDir, 'sessions.json') : '';
   const sessions = new Map();
+  if (sessionFile) {
+    try {
+      for (const [key, value] of Object.entries(JSON.parse(readFileSync(sessionFile, 'utf8')))) {
+        if (value && value.expires > Date.now()) sessions.set(key, value);
+      }
+    } catch { /* no saved sessions yet */ }
+  }
+  const persist = () => {
+    if (!sessionFile) return;
+    try {
+      mkdirSync(config.dataDir, { recursive: true });
+      const tmp = `${sessionFile}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify(Object.fromEntries(sessions)), { mode: 0o600 });
+      renameSync(tmp, sessionFile);
+    } catch { /* sessions then last until the next restart; not fatal */ }
+  };
   let failures = [];
 
   const sessionFor = (req) => {
-    const id = readCookie(req, SESSION_COOKIE);
-    const session = id && sessions.get(id);
+    const raw = readCookie(req, SESSION_COOKIE);
+    const key = raw && sha(raw);
+    const session = key && sessions.get(key);
     if (!session) return null;
-    if (session.expires < Date.now()) { sessions.delete(id); return null; }
-    return { id, ...session };
+    if (session.expires < Date.now() || session.tag !== pwTag()) { sessions.delete(key); persist(); return null; }
+    // Sliding expiry for remembered sessions, saved at most about once an hour.
+    if (session.remember && session.expires - Date.now() < REMEMBER_TTL_MS - 3600_000) {
+      session.expires = Date.now() + REMEMBER_TTL_MS;
+      persist();
+    }
+    return { id: key, ...session };
   };
 
   const cookie = (req, value, maxAge) => {
     const host = String(req.headers.host || '');
     const local = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host);
     const secure = req.headers['x-forwarded-proto'] === 'https' || !local;
-    return `${SESSION_COOKIE}=${value}; Path=/admin; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
+    return `${SESSION_COOKIE}=${value}; Path=/admin; HttpOnly; SameSite=Strict${maxAge === null ? '' : `; Max-Age=${maxAge}`}${secure ? '; Secure' : ''}`;
   };
 
   // Browser calls must be same-origin JSON: custom content type forces a preflight, Origin must match Host.
@@ -152,9 +181,11 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
       throw new AdminError('invalid_credentials', 401);
     }
     const id = randomBytes(32).toString('base64url');
-    sessions.set(id, { expires: Date.now() + SESSION_TTL_MS });
-    if (sessions.size > 50) for (const [key, s] of sessions) if (s.expires < Date.now()) sessions.delete(key);
-    send(res, 200, { ok: true }, { 'Set-Cookie': cookie(req, id, SESSION_TTL_MS / 1000) });
+    const remember = body?.remember !== false;
+    sessions.set(sha(id), { expires: Date.now() + (remember ? REMEMBER_TTL_MS : SESSION_TTL_MS), remember, tag: pwTag() });
+    for (const [key, s] of sessions) if (s.expires < Date.now()) sessions.delete(key);
+    persist();
+    send(res, 200, { ok: true }, { 'Set-Cookie': cookie(req, id, remember ? REMEMBER_TTL_MS / 1000 : null) });
   }
 
   async function api(req, res, path) {
@@ -167,6 +198,7 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
 
     if (method === 'POST' && path === '/admin/api/logout') {
       sessions.delete(session.id);
+      persist();
       return send(res, 200, { ok: true }, { 'Set-Cookie': cookie(req, '', 0) });
     }
     if (method === 'GET' && path === '/admin/api/state') return send(res, 200, stateView());
@@ -242,8 +274,11 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
       if (typeof next !== 'string' || next.length < 12 || next.length > 200) throw new AdminError('password_too_short');
       if (!(await verifyPassword(String(current ?? ''), config.adminPasswordHash))) throw new AdminError('invalid_credentials', 403);
       store.setPasswordHash(await hashPassword(next));
-      // Sign out every other session.
-      for (const key of sessions.keys()) if (key !== session.id) sessions.delete(key);
+      // The password changed: sign out every other session and re-tag this one.
+      for (const key of [...sessions.keys()]) if (key !== session.id) sessions.delete(key);
+      const mine = sessions.get(session.id);
+      if (mine) mine.tag = pwTag();
+      persist();
       return send(res, 200, { ok: true });
     }
     throw new AdminError('not_found', 404);

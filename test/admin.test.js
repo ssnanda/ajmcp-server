@@ -26,15 +26,15 @@ async function fixture() {
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const url = `http://127.0.0.1:${server.address().port}`;
-  let cookie = '';
+  let cookie = ''; let setCookieHeader = '';
   const call = async (path, method = 'GET', body, headers = {}) => {
     const res = await fetch(url + path, { method, headers: { ...(method !== 'GET' ? { 'content-type': 'application/json' } : {}), ...(cookie ? { cookie } : {}), ...headers },
       ...(method !== 'GET' ? { body: JSON.stringify(body ?? {}) } : {}) });
     const set = res.headers.get('set-cookie');
-    if (set) cookie = set.split(';')[0];
+    if (set) { cookie = set.split(';')[0]; setCookieHeader = set; }
     return { res, data: await res.json().catch(() => ({})) };
   };
-  return { dir, config, server, url, call, calls };
+  return { dir, config, server, url, call, calls, get cookie() { return cookie; }, get setCookieHeader() { return setCookieHeader; } };
 }
 
 test('password hashing verifies only the right password', async () => {
@@ -45,12 +45,19 @@ test('password hashing verifies only the right password', async () => {
 });
 
 test('admin requires login, then manages sites; tokens are hashed and work immediately', async (t) => {
-  const { dir, server, url, call, config } = await fixture();
+  const fx = await fixture();
+  const { dir, server, url, call, config } = fx;
   t.after(() => server.close());
 
   assert.equal((await call('/admin/api/state')).res.status, 401);
   assert.equal((await call('/admin/api/login', 'POST', { username: 'admin', password: 'wrong' })).res.status, 401);
   assert.equal((await call('/admin/api/login', 'POST', { username: 'admin', password: 'correct horse battery' })).res.status, 200);
+
+  const cookie = fx.cookie; const setCookieHeader = fx.setCookieHeader;
+  const sessionsText = readFileSync(join(dir, 'sessions.json'), 'utf8');
+  assert.equal(sessionsText.includes(cookie.split('=')[1]), false, 'raw session id must not be stored');
+  assert.equal(statSync(join(dir, 'sessions.json')).mode & 0o777, 0o600);
+  assert.match(setCookieHeader, /Max-Age=2592000/, 'remembered by default (30 days)');
 
   const state = (await call('/admin/api/state')).data;
   assert.equal(state.sites.length, 0);
@@ -119,4 +126,31 @@ test('admin UI is not served when no admin login is configured', async (t) => {
   t.after(() => server.close());
   const res = await fetch(`http://127.0.0.1:${server.address().port}/admin`);
   assert.equal(res.status, 401);
+});
+
+test('a remembered login survives a server restart; a password change signs other sessions out', async (t) => {
+  const first = await fixture();
+  t.after(() => first.server.close());
+  await first.call('/admin/api/login', 'POST', { username: 'admin', password: 'correct horse battery' });
+  const cookie = first.cookie;
+  first.server.close();
+
+  // New process, same data directory and same admin hash.
+  const config = loadConfig({ DATA_DIR: first.dir, ADMIN_USER: 'admin', ADMIN_PASSWORD_HASH: first.config.adminPasswordHash });
+  const store = new SettingsStore(config);
+  store.load();
+  const second = createAjmcpServer(config, { store });
+  second.listen(0, '127.0.0.1');
+  await once(second, 'listening');
+  t.after(() => second.close());
+  const base = `http://127.0.0.1:${second.address().port}`;
+  assert.equal((await fetch(base + '/admin/api/state', { headers: { cookie } })).status, 200, 'still signed in after restart');
+
+  // The deploy script issuing a new password hash (--reset-admin) invalidates old sessions.
+  const reset = loadConfig({ DATA_DIR: first.dir, ADMIN_USER: 'admin', ADMIN_PASSWORD_HASH: await hashPassword('a brand new password') });
+  const third = createAjmcpServer(reset, { store: new SettingsStore(reset) });
+  third.listen(0, '127.0.0.1');
+  await once(third, 'listening');
+  t.after(() => third.close());
+  assert.equal((await fetch(`http://127.0.0.1:${third.address().port}/admin/api/state`, { headers: { cookie } })).status, 401);
 });
