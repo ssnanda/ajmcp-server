@@ -125,8 +125,11 @@ export class SettingsStore {
     const sites = this.sites();
     if (sites.some((s) => s.id === id)) throw new StoreError('site_exists', 409);
     const token = randomBytes(32).toString('hex');
-    const site = toStored({ id, token, ...cleanSite(input) });
-    this.write({ ...this.state, sites: [...sites, site] });
+    // Defaults for a new assistant: lead capture on, and it can transfer to every other assistant (and they to it).
+    const others = sites.map((s) => s.id);
+    const site = toStored({ id, token, ...cleanSite({ ...input, leadCapture: input.leadCapture ?? true, transferTargets: input.transferTargets ?? others.slice(0, 10) }) });
+    const updated = sites.map((s) => (input.transferTargets === undefined && !s.transferTargets.includes(id) && s.transferTargets.length < 10 ? { ...s, transferTargets: [...s.transferTargets, id] } : s));
+    this.write({ ...this.state, sites: [...updated, site] });
     return { site, token };
   }
 

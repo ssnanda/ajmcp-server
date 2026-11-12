@@ -132,3 +132,25 @@ test('a failure on the new assistant leaves the customer on the one that asked',
   await assert.rejects(routeChat({ entry: config.sites[0], convs, key: 'k|1', messages: [{ role: 'user', content: 'registered agent' }], context: { channel: 'sms' }, config, fetchFn }));
   assert.equal(convs.get('front', 'k|1').active, 'front');
 });
+
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { SettingsStore } from '../src/store.js';
+
+test('a new assistant starts with lead capture on and with transfers to and from the others', () => {
+  const config = loadConfig({ DATA_DIR: mkdtempSync(join(tmpdir(), 'ajmcp-add-')), OPENAI_API_KEY: 'sk-test-key-1234567890' });
+  const store = new SettingsStore(config);
+  store.load();
+  store.addSite({ id: 'one' });
+  store.addSite({ id: 'two' });
+  store.addSite({ id: 'three' });
+  const byId = Object.fromEntries(store.sites().map((s) => [s.id, s]));
+  assert.equal(byId.three.leadCapture, true);
+  assert.deepEqual([...byId.three.transferTargets].sort(), ['one', 'two']);
+  assert.deepEqual([...byId.one.transferTargets].sort(), ['three', 'two']);
+  store.updateSite('two', { transferTargets: [] });   // can be switched off later
+  assert.deepEqual(store.sites().find((s) => s.id === 'two').transferTargets, []);
+  store.removeSite('three');
+  assert.ok(!store.sites().find((s) => s.id === 'one').transferTargets.includes('three'));
+});
