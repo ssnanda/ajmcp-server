@@ -217,6 +217,19 @@ oc patch buildconfig "$APP" -n "$PROJECT" --type=merge \
 mkdir -p "$TMP/build"
 cp Containerfile package.json tool-versions.json "$TMP/build/"
 cp -R src "$TMP/build/src"
+# Sweep finished build pods (completed or failed) from earlier deploys so they do not pile up. Only terminal-phase pods
+# are removed: a build that is still running is never touched. Old Build objects are pruned by the BuildConfig history limits.
+echo "Cleaning up old build pods..."
+for phase in Succeeded Failed; do
+  oc get pods -n "$PROJECT" -l openshift.io/build.name --field-selector="status.phase=$phase" -o name 2>/dev/null \
+    | xargs -r -n1 oc delete -n "$PROJECT" --ignore-not-found=true
+done
+# Builds run one at a time. If one is still going (or stuck) this deploy would wait behind it and time out, so say so up front.
+BUSY="$(oc get builds -n "$PROJECT" -l buildconfig="$APP" --no-headers 2>/dev/null | awk '$4 ~ /^(New|Pending|Running)$/ {print $1}' | tr '\n' ' ')"
+if [[ -n "$BUSY" ]]; then
+  echo "WARNING: an earlier build is still active: $BUSY" >&2
+  echo "         This build will queue behind it. If it is stuck: oc cancel-build <name> -n $PROJECT" >&2
+fi
 echo "Building AJMCP + Codex + Claude inside OpenShift..."
 oc start-build "$APP" -n "$PROJECT" --from-dir="$TMP/build" --follow --wait
 
