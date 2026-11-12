@@ -133,6 +133,7 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
     id: site.id, provider: site.provider, model: site.model, systemPrompt: site.systemPrompt,
     disabled: Boolean(site.disabled), strict: site.strict !== false, fallback: site.fallback || '',
     leadCapture: Boolean(site.leadCapture), leadInstructions: site.leadInstructions || '',
+    routeLabel: site.routeLabel || '', transferTargets: site.transferTargets || [],
     knowledge: (site.knowledge || []).map((d) => ({ id: d.id, title: d.title, chars: d.text.length })), knowledgeChars: knowledgeChars(site.knowledge || []),
     tokenHint: site.tokenHint || '', createdAt: site.createdAt || null,
     tokens: (site.tokens || []).map((t) => ({ id: t.id, label: t.label, hint: t.tokenHint, createdAt: t.createdAt })),

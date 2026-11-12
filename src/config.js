@@ -27,7 +27,9 @@ function parseSites(raw, allowEmpty = false) {
     return Object.freeze({
       id, token, provider: site.provider || 'openai',
       model: String(site.model || ''),
-      systemPrompt: String(site.systemPrompt || '').slice(0, 12000)
+      systemPrompt: String(site.systemPrompt || '').slice(0, 12000),
+      routeLabel: String(site.routeLabel || '').slice(0, 200),
+      transferTargets: Array.isArray(site.transferTargets) ? site.transferTargets.map(String).slice(0, 10) : []
     });
   });
 }

@@ -24,7 +24,13 @@ function cleanSite(input, existing = {}) {
   if (fallback.length > 500) throw new StoreError('fallback_too_long');
   const leadInstructions = String(input.leadInstructions ?? existing.leadInstructions ?? '');
   if (leadInstructions.length > 4000) throw new StoreError('lead_instructions_too_long');
-  return { provider, model, systemPrompt, leadCapture: Boolean(input.leadCapture ?? existing.leadCapture), leadInstructions, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback };
+  const routeLabel = String(input.routeLabel ?? existing.routeLabel ?? '').replace(/\s+/g, ' ').trim();
+  if (routeLabel.length > 200) throw new StoreError('route_label_too_long');
+  const rawTargets = input.transferTargets ?? existing.transferTargets ?? [];
+  if (!Array.isArray(rawTargets) || rawTargets.length > 10) throw new StoreError('invalid_transfer_targets');
+  const transferTargets = [...new Set(rawTargets.map((t) => String(t).trim()))];
+  if (!transferTargets.every((t) => ID_RE.test(t))) throw new StoreError('invalid_transfer_targets');
+  return { provider, model, systemPrompt, leadCapture: Boolean(input.leadCapture ?? existing.leadCapture), leadInstructions, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback, routeLabel, transferTargets };
 }
 
 // Normalizes a runtime site (seed file token or stored hash) to the persisted shape. Never keeps a plain token.
@@ -40,6 +46,9 @@ function toStored(site) {
     strict: site.strict !== false,
     fallback: site.fallback || '',
     leadCapture: Boolean(site.leadCapture),
+    // Routing: a short description other assistants see, and which assistants this one may pass a customer to.
+    routeLabel: site.routeLabel || '',
+    transferTargets: Array.isArray(site.transferTargets) ? site.transferTargets.map(String) : [],
     // Extra named access tokens (for example one for AJOps), alongside the primary token above.
     tokens: Array.isArray(site.tokens) ? site.tokens.map((t) => ({ id: String(t.id), label: String(t.label), tokenHash: String(t.tokenHash), tokenHint: String(t.tokenHint || ''), createdAt: t.createdAt || null })) : [],
     leadInstructions: site.leadInstructions || '',
@@ -125,7 +134,9 @@ export class SettingsStore {
     const sites = this.sites();
     const index = sites.findIndex((s) => s.id === id);
     if (index < 0) throw new StoreError('site_not_found', 404);
-    sites[index] = { ...sites[index], ...cleanSite(input, sites[index]) };
+    const cleaned = cleanSite(input, sites[index]);
+    cleaned.transferTargets = cleaned.transferTargets.filter((t) => t !== id);   // never to itself
+    sites[index] = { ...sites[index], ...cleaned };
     this.write({ ...this.state, sites });
     return sites[index];
   }
@@ -254,7 +265,8 @@ export class SettingsStore {
   removeSite(id) {
     const sites = this.sites();
     if (!sites.some((s) => s.id === id)) throw new StoreError('site_not_found', 404);
-    this.write({ ...this.state, sites: sites.filter((s) => s.id !== id) });
+    // A deleted assistant can no longer be a transfer target of the others.
+    this.write({ ...this.state, sites: sites.filter((s) => s.id !== id).map((s) => ({ ...s, transferTargets: (s.transferTargets || []).filter((t) => t !== id) })) });
   }
 
   setKey(provider, value) {

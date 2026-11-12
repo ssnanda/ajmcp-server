@@ -4,6 +4,7 @@ import { identityForBearer, authorizeSite } from './auth.js';
 import { Limiter } from './limits.js';
 import { InputError } from './provider.js';
 import { runChat } from './chat.js';
+import { routeChat, ConversationStore, KEY_RE } from './routing.js';
 import { LeadLimiter } from './leads.js';
 import { runAgent, installedToolVersions } from './agents.js';
 import { handleMcp } from './mcp.js';
@@ -64,6 +65,8 @@ function prepareAjcoreChat(body, config) {
 }
 
 /** Facts the plugin passes along with a chat message; all optional, all length-limited. */
+const channelIsSms = (body) => body.channel === 'sms';
+
 function chatContext(body, sessionId) {
   const text = (value, max) => (typeof value === 'string' ? value.replace(/[\u0000-\u001f]+/g, ' ').trim().slice(0, max) : '');
   const page = text(body.page, 300);
@@ -78,7 +81,9 @@ function chatContext(body, sessionId) {
     leadTool: body.leadTool === true,
     // Which channel the visitor is on (text messages get short plain replies) and whether the caller can act on a human handoff.
     channel: body.channel === 'sms' ? 'sms' : 'chat',
-    handoff: body.handoff === true
+    handoff: body.handoff === true,
+    // Text-message conversations: a stable id (line + customer) so the server can remember which assistant is active.
+    conversationKey: channelIsSms(body) && KEY_RE.test(String(body.conversationKey || '')) ? String(body.conversationKey) : ''
   };
 }
 
@@ -86,6 +91,8 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
   const limiter = new Limiter(config);
   const stats = new Stats();
   const leadLimiter = new LeadLimiter();
+  const convs = new ConversationStore(config.dataDir);
+  convs.load();
   // The admin UI exists only when ADMIN_USER / ADMIN_PASSWORD_HASH are configured (see DATA_DIR).
   const admin = config.adminUser
     ? createAdmin({ config, store, stats, fetchFn, readBody })
@@ -152,7 +159,13 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
           if (!ajcore && (!body || typeof body !== 'object' || Array.isArray(body))) throw new InputError('invalid_request');
           // Clients cannot choose provider, model, system instructions or another tenant.
           let reply;
-          try { reply = await runChat({ site, messages: ajcore ? ajcore.messages : body.messages, context: chatContext(body, ajcore ? ajcore.sessionId : 0), config, fetchFn, limiter: leadLimiter }); }
+          try {
+            const context = chatContext(body, ajcore ? ajcore.sessionId : 0);
+            const messages = ajcore ? ajcore.messages : body.messages;
+            reply = context.conversationKey
+              ? await routeChat({ entry: site, convs, key: context.conversationKey, messages, context, config, fetchFn, limiter: leadLimiter, log: (m) => console.info(`[routing] ${site.id} ${m}`) })
+              : await runChat({ site, messages, context, config, fetchFn, limiter: leadLimiter });
+          }
           catch (error) { stats.fail(site.id, error.code || error.message); throw error; }
           stats.ok(site.id);
           status = 200;
@@ -161,7 +174,8 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
             ...(ajcore ? { sessionId: ajcore.sessionId, reply: reply.text, senderName: 'AJMCP AI' } : { reply: reply.text }),
             provider: reply.provider, model: reply.model, usage: reply.usage,
             ...(reply.lead ? { lead: reply.lead } : {}), ...(reply.leadError ? { leadError: reply.leadError } : {}),
-            ...(reply.handoff !== undefined ? { handoff: reply.handoff } : {})
+            ...(reply.handoff !== undefined ? { handoff: reply.handoff } : {}),
+            ...(reply.assistant ? { assistant: reply.assistant } : {}), ...(reply.routed ? { routed: reply.routed } : {})
           }, id);
         } finally { slot.release(); }
       }

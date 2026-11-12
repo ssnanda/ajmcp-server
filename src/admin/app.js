@@ -4,7 +4,7 @@ let state = null;
 let cli = null;             // installed CLI versions + login state
 const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)']];
 const isCli = (p) => p.endsWith('-cli');
-const TABS = [['sites', 'Sites'], ['logins', 'Logins & keys'], ['account', 'Account']];
+const TABS = [['sites', 'Assistants'], ['logins', 'Logins & keys'], ['account', 'Account']];
 let tab = TABS.some(([k]) => '#' + k === location.hash) ? location.hash.slice(1) : 'sites';
 let notice = null;           // { kind: 'err'|'ok', text, secret? }
 const models = {};           // provider -> [ids]
@@ -106,11 +106,19 @@ function generalPanel(site) {
   const { provider, model, list } = modelPicker(site);
   const prompt = h('textarea', { rows: 8 });
   prompt.value = site.systemPrompt;
+  // Routing: what this assistant handles (shown to the assistants that can pass customers to it) and who it may pass to.
+  const routeLabel = h('input', { value: site.routeLabel || '', placeholder: 'What it handles, e.g. NC LLC Agents: registered agent, LLC formation' });
+  const others = state.sites.filter((s) => s.id !== site.id);
+  const boxes = others.map((o) => ({ id: o.id, box: h('input', { type: 'checkbox', checked: (site.transferTargets || []).includes(o.id) || null }) }));
   return [
     h('div', { class: 'row' }, field('Provider', provider), field('Model', model), list),
     h('div', null, h('label', null, 'Instructions (system prompt)'), prompt),
+    h('div', { class: 'mt' }, field('What this assistant handles', routeLabel)),
+    others.length ? h('div', { class: 'mt' }, h('label', null, 'Can transfer customers to'),
+      h('div', { class: 'meta' }, 'Text messages only. The AI asks the server to move a customer; the server checks this list.'),
+      ...boxes.map(({ id, box }) => h('label', { class: 'check' }, box, ' ' + id))) : null,
     h('div', { class: 'actions mt' },
-      h('button', { class: 'primary', type: 'button', onclick: () => run(() => api('/sites/' + site.id, 'PUT', { provider: provider.value, model: model.value, systemPrompt: prompt.value }).then(refresh), 'Saved ' + site.id) }, 'Save'))
+      h('button', { class: 'primary', type: 'button', onclick: () => run(() => api('/sites/' + site.id, 'PUT', { provider: provider.value, model: model.value, systemPrompt: prompt.value, routeLabel: routeLabel.value, transferTargets: boxes.filter((b) => b.box.checked).map((b) => b.id) }).then(refresh), 'Saved ' + site.id) }, 'Save'))
   ];
 }
 
@@ -180,11 +188,11 @@ function accessPanel(site) {
   return [
     h('div', { class: 'facts' },
       h('div', null, h('label', null, 'Server URL'), h('code', null, location.origin)),
-      h('div', null, h('label', null, 'Site id'), h('code', null, site.id)),
+      h('div', null, h('label', null, 'Assistant id'), h('code', null, site.id)),
       h('div', null, h('label', null, 'Token'), h('code', null, '…' + (site.tokenHint || '????'))),
       h('div', null, h('label', null, 'Since last restart'), h('span', null, s.requests ? `${s.requests} requests · ${s.errors} errors` + (s.lastErrorCode ? ` · last: ${s.lastErrorCode}` : '') : 'no requests yet'))),
     h('h3', { class: 'mt' }, 'Access tokens'),
-    h('div', { class: 'meta' }, 'Each system that talks to this site (AJOps, the WordPress plugin) can have its own token, so one can be revoked without touching the others.'),
+    h('div', { class: 'meta' }, 'Each system that talks to this assistant (AJOps, a website) can have its own token, so one can be revoked without touching the others.'),
     h('div', { class: 'doc' }, h('span', { class: 'grow' }, 'Primary token'), h('span', { class: 'meta' }, '…' + (site.tokenHint || '????'))),
     ...(site.tokens || []).map((t) => h('div', { class: 'doc' },
       h('span', { class: 'grow' }, t.label), h('span', { class: 'meta' }, '…' + (t.hint || '????')),
@@ -211,7 +219,7 @@ function accessPanel(site) {
         await run(async () => { const r = await api('/sites/' + site.id + '/rotate', 'POST'); notice = { kind: 'ok', text: `New token for ${site.id} (shown once):`, secret: r.token }; await refresh(); });
       } }, 'Rotate token'),
       h('button', { class: 'danger', type: 'button', onclick: async () => {
-        if (!confirm(`Delete site ${site.id}? Its token stops working immediately.`)) return;
+        if (!confirm(`Delete assistant ${site.id}? Its token stops working immediately.`)) return;
         sel = { id: null, section: 'general', add: false };
         await run(() => api('/sites/' + site.id, 'DELETE').then(refresh), 'Deleted ' + site.id);
       } }, 'Delete'))
@@ -219,7 +227,7 @@ function accessPanel(site) {
 }
 
 function addPanel() {
-  const id = h('input', { placeholder: 'site-id', pattern: '[a-z0-9][a-z0-9_\\-]{1,63}', required: true });
+  const id = h('input', { placeholder: 'assistant-id', pattern: '[a-z0-9][a-z0-9_\\-]{1,63}', required: true });
   const { provider, model, list } = modelPicker(null);
   const prompt = h('textarea', { placeholder: 'Instructions (optional, can be added later)', rows: 5 });
   return [h('form', { onsubmit: (e) => {
@@ -228,13 +236,13 @@ function addPanel() {
       const r = await api('/sites', 'POST', { id: id.value.trim(), provider: provider.value, model: model.value.trim(), systemPrompt: prompt.value });
       sel = { id: r.site.id, section: 'access', add: false };
       treeOpen.add(r.site.id);
-      notice = { kind: 'ok', text: `Site ${r.site.id} created. Token (shown once):`, secret: r.token };
+      notice = { kind: 'ok', text: `Assistant ${r.site.id} created. Token (shown once):`, secret: r.token };
       await refresh();
     });
   } },
-    h('div', { class: 'row' }, field('Site id', id), field('Provider', provider), field('Model', model), list),
+    h('div', { class: 'row' }, field('Assistant id', id), field('Provider', provider), field('Model', model), list),
     h('div', null, prompt),
-    h('div', { class: 'actions mt' }, h('button', { class: 'primary', type: 'submit', disabled: !state.storage || null }, 'Create site')))];
+    h('div', { class: 'actions mt' }, h('button', { class: 'primary', type: 'submit', disabled: !state.storage || null }, 'Create assistant')))];
 }
 
 /* ---------- left-hand tree ---------- */
@@ -314,7 +322,7 @@ function tiles() {
   const keys = ['anthropic', 'openai'].filter((p) => state.keys[p].set).length;
   const login = (i) => !i || !i.version ? 'n/a' : i.loggedIn ? 'Logged in' : 'Not logged in';
   return h('div', { class: 'tiles' },
-    tile('blue', `${active}/${state.sites.length}`, 'Sites active'),
+    tile('blue', `${active}/${state.sites.length}`, 'Assistants active'),
     tile('violet', total, 'Requests since start'),
     tile(errors ? 'red' : 'green', errors, 'Errors'),
     tile(cli && cli.claude.loggedIn ? 'green' : 'orange', login(cli && cli.claude), 'Claude CLI'),
@@ -329,15 +337,15 @@ function sitesTab() {
   }
   const site = state.sites.find((x) => x.id === sel.id);
   const tree = h('nav', { class: 'tree' },
-    h('button', { type: 'button', class: 'tadd' + (sel.add ? ' on' : ''), onclick: () => { sel = { id: sel.id, section: sel.section, add: true }; render(); } }, '+ Add site'),
+    h('button', { type: 'button', class: 'tadd' + (sel.add ? ' on' : ''), onclick: () => { sel = { id: sel.id, section: sel.section, add: true }; render(); } }, '+ Add assistant'),
     ...state.sites.map(treeNode),
-    state.sites.length ? null : h('div', { class: 'empty' }, 'No sites yet.'));
+    state.sites.length ? null : h('div', { class: 'empty' }, 'No assistants yet.'));
   const panel = sel.add ? addPanel()
     : [h('h2', null, h('span', { class: 'grow' }, `${site.id} · ${(SECTIONS.find(([k]) => k === sel.section) || [0, ''])[1]}`),
         h('span', { class: 'pill ' + (site.disabled ? 'off' : 'on') }, site.disabled ? 'disabled' : 'active'),
         h('span', { class: 'pill tone-' + site.provider }, providerLabel(site.provider))),
       ...(sel.section === 'knowledge' ? knowledgePanel(site) : sel.section === 'leads' ? leadsPanel(site) : sel.section === 'access' ? accessPanel(site) : generalPanel(site))];
-  return [h('div', { class: 'split' }, tree, h('section', { class: 'card panel' }, ...(sel.add ? [h('h2', null, 'Add site'), ...panel] : panel)))];
+  return [h('div', { class: 'split' }, tree, h('section', { class: 'card panel' }, ...(sel.add ? [h('h2', null, 'Add assistant'), ...panel] : panel)))];
 }
 
 const openSections = new Set();   // collapsible cards the user has expanded (collapsed by default)

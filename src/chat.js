@@ -18,6 +18,40 @@ const HANDOFF_BLOCK = [
 ].join('\n');
 
 const HANDOFF_TAG = /<handoff>([\s\S]*?)<\/handoff>/i;
+const TRANSFER_TAG = /<transfer>([\s\S]*?)<\/transfer>/i;
+
+/** Splits a reply into its visible text and a requested transfer ({ target, reason }, or null). The caller validates the target. */
+export function extractTransfer(text) {
+  const match = TRANSFER_TAG.exec(String(text));
+  const visible = String(text).replace(/<transfer>[\s\S]*?<\/transfer>/gi, '').replace(/<\/?transfer>/gi, '').trim();
+  if (!match) return { visible, transfer: null };
+  const [target, ...rest] = String(match[1]).split('|');
+  return { visible, transfer: { target: target.trim().toLowerCase().slice(0, 64), reason: rest.join('|').replace(/\s+/g, ' ').trim().slice(0, 200) } };
+}
+
+/** What an assistant is told when it may pass the customer to another assistant, and/or just received one. */
+export function routingBlock(routing) {
+  if (!routing) return '';
+  const lines = [];
+  if (routing.targets && routing.targets.length) {
+    lines.push(
+      'ROUTING',
+      '- You can move this customer to another assistant. Do it only when they clearly need one of these:',
+      ...routing.targets.map((t) => `  - ${t.id}${t.label ? `: ${t.label}` : ''}`),
+      '- To move them, add after a short friendly line exactly: <transfer>assistant-id|short reason</transfer>',
+      '- Never name the other assistants or say you are a different assistant. If they have not said what they need yet, ask one short question instead.',
+      '- If you can answer yourself, do not transfer.'
+    );
+  }
+  if (routing.arrivedFrom) {
+    lines.push(
+      'TRANSFERRED CUSTOMER',
+      `- This customer was just routed to you${routing.arrivedFrom.reason ? ` (reason: ${routing.arrivedFrom.reason})` : ''}. Answer their latest message directly.`,
+      '- Do not ask again what they need and do not mention routing.'
+    );
+  }
+  return lines.join('\n');
+}
 
 /** Splits a reply into its visible text and a handoff reason (or null). */
 export function extractHandoff(text) {
@@ -43,12 +77,13 @@ export function cleanSms(text, max = 480) {
 
 /** Applies the channel and handoff rules around one model call. */
 async function reply(site, messages, context, config, fetchFn) {
-  const blocks = [site.systemPrompt, context.channel === 'sms' ? SMS_BLOCK : '', context.handoff ? HANDOFF_BLOCK : ''].filter(Boolean);
+  const blocks = [site.systemPrompt, context.channel === 'sms' ? SMS_BLOCK : '', context.handoff ? HANDOFF_BLOCK : '', routingBlock(context.routing)].filter(Boolean);
   const turnSite = blocks.length > 1 ? { ...site, systemPrompt: blocks.join('\n\n') } : site;
   const raw = await generateReply(turnSite, messages, config, fetchFn);
-  const { visible, reason } = extractHandoff(raw.text);
+  const { visible: afterHandoff, reason } = extractHandoff(raw.text);
+  const { visible, transfer } = extractTransfer(afterHandoff);
   const text = context.channel === 'sms' ? cleanSms(visible) : visible;
-  return { ...raw, text, ...(reason !== null ? { handoff: reason } : {}) };
+  return { ...raw, text, ...(reason !== null ? { handoff: reason } : {}), ...(transfer ? { transfer } : {}) };
 }
 
 // The model is told not to claim a save; if it does anyway, that sentence is replaced (the plugin adds the true result).
