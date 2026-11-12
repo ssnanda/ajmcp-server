@@ -127,15 +127,32 @@ function knowledgePanel(site) {
   const fallback = h('input', { value: site.fallback, placeholder: 'Reply when the answer is not in the knowledge' });
   const title = h('input', { placeholder: 'Title (e.g. Pricing, FAQ, Services)' });
   const text = h('textarea', { placeholder: 'Paste text here, or choose a .txt / .md / .csv / .json file', rows: 6 });
-  const file = h('input', { type: 'file', accept: '.txt,.md,.markdown,.csv,.json,.html,.htm,text/*' });
+  const file = h('input', { type: 'file', multiple: true, accept: '.txt,.md,.markdown,.csv,.json,.html,.htm,text/*' });
+  // Several files selected: each becomes its own document (title = first line if short, else file name).
+  let batch = [];
   file.addEventListener('change', async () => {
-    const f = file.files[0];
-    if (!f) return;
-    if (f.size > 1_000_000) { notice = { kind: 'err', text: 'file too large (1 MB max)' }; render(); return; }
-    text.value = await f.text();
-    if (!title.value) title.value = f.name.replace(/\.[^.]+$/, '');
+    const picked = [...file.files];
+    batch = [];
+    if (!picked.length) return;
+    if (picked.some((f) => f.size > 1_000_000)) { notice = { kind: 'err', text: 'file too large (1 MB max)' }; render(); return; }
+    if (picked.length === 1) {
+      text.value = await picked[0].text();
+      if (!title.value) title.value = picked[0].name.replace(/\.[^.]+$/, '');
+      return;
+    }
+    for (const f of picked) {
+      const raw = (await f.text()).replace(/^\uFEFF/, '').trim();
+      const nl = raw.indexOf('\n');
+      const first = (nl < 0 ? raw : raw.slice(0, nl)).trim();
+      const useFirst = nl > 0 && first.length > 0 && first.length <= 80;
+      batch.push({ title: useFirst ? first : f.name.replace(/\.[^.]+$/, ''), text: useFirst ? raw.slice(nl + 1).trim() : raw });
+    }
+    title.value = '';
+    text.value = `${batch.length} files ready:\n` + batch.map((d) => '• ' + d.title).join('\n') + '\n\nClick Add document to add them all.';
   });
-  const question = h('input', { placeholder: 'Try a visitor question' });
+  const question = h('input', { placeholder: 'Try a visitor question', onkeydown: (e) => { if (e.key === 'Enter') askBtn.click(); } });
+  const busy = testRun && testRun.siteId === site.id && !testRun.endedAt;
+  const askBtn = h('button', { type: 'button', class: 'primary', disabled: busy || null, onclick: () => askTest(site, question.value.trim()) }, busy ? 'Asking…' : 'Ask');
   const docs = site.knowledge.length
     ? site.knowledge.map((d) => h('div', { class: 'doc' },
         h('span', { class: 'grow' }, d.title), h('span', { class: 'meta' }, kb(d.chars)),
@@ -144,30 +161,72 @@ function knowledgePanel(site) {
           await run(() => api('/sites/' + site.id + '/knowledge/' + d.id, 'DELETE').then(refresh), 'Removed ' + d.title);
         } }, 'Remove')))
     : [h('div', { class: 'empty' }, 'No documents yet.')];
-  return [
+  const testBox = h('div', { id: 'test-box' });
+  paintTest(testBox, site.id);
+  const left = h('div', { class: 'kn-docs' },
     h('h3', null, 'Documents ', h('span', { class: 'pill' }, `${site.knowledge.length} docs · ${kb(site.knowledgeChars)}`)),
-    ...docs,
-    h('div', { class: 'row mt' }, field('Title', title), field('File', file)),
-    h('div', null, text),
+    ...docs);
+  const right = h('div', { class: 'kn-side' },
+    h('h3', null, 'Add documents'),
+    h('div', { class: 'row' }, field('Files (select several)', file), field('Title (single file or pasted text)', title)),
+    text,
     h('div', { class: 'actions mt' },
       h('button', { type: 'button', onclick: () => {
+        if (batch.length) {
+          const docsToAdd = batch;
+          run(async () => { for (const d of docsToAdd) await api('/sites/' + site.id + '/knowledge', 'POST', d); await refresh(); }, `Added ${docsToAdd.length} documents`);
+          return;
+        }
         if (!title.value.trim() || !text.value.trim()) { notice = { kind: 'err', text: 'title and text are required' }; render(); return; }
         run(() => api('/sites/' + site.id + '/knowledge', 'POST', { title: title.value, text: text.value }).then(refresh), 'Added ' + title.value.trim());
-      } }, 'Add document')),
+      } }, 'Add')),
     h('h3', { class: 'mt' }, 'Behavior'),
     h('label', { class: 'check' }, strict, ' Answer only from this knowledge'),
-    h('div', { class: 'row' }, field('Fallback reply', fallback)),
-    h('div', { class: 'actions' },
+    h('div', { class: 'actions mt' },
+      h('div', { class: 'grow' }, fallback),
       h('button', { class: 'primary', type: 'button', onclick: () => run(() => api('/sites/' + site.id, 'PUT', { strict: strict.checked, fallback: fallback.value }).then(refresh), 'Saved ' + site.id) }, 'Save')),
     h('h3', { class: 'mt' }, 'Try it'),
-    h('div', { class: 'actions' }, question,
-      h('button', { type: 'button', onclick: () => run(async () => {
-        if (!question.value.trim()) return;
-        const r = await api('/sites/' + site.id + '/test', 'POST', { question: question.value });
-        notice = r.ok ? { kind: 'ok', text: `${site.id} answered: ${r.reply}` } : { kind: 'err', text: `${site.id}: ${words(r.error)}` };
-        await refresh();
-      }) }, 'Ask'))
-  ];
+    h('div', { class: 'actions' }, h('div', { class: 'grow' }, question), askBtn),
+    testBox);
+  return [h('div', { class: 'kn' }, left, right)];
+}
+
+/* ---------- "Try it" with a live timer; the answer shows right under the button ---------- */
+let testRun = null;   // { siteId, question, startedAt, endedAt?, ok?, reply?, error? }
+let testTimer = null;
+const secs = (ms) => (ms / 1000).toFixed(ms < 10000 ? 1 : 0) + 's';
+
+function paintTest(box, siteId) {
+  box.replaceChildren();
+  if (!testRun || testRun.siteId !== siteId) return;
+  const done = !!testRun.endedAt;
+  if (!done) {
+    box.append(h('div', { class: 'testbox run' }, h('span', { class: 'spin' }), ` Thinking… ${secs(Date.now() - testRun.startedAt)}`, h('div', { class: 'meta' }, 'Q: ' + testRun.question)));
+    return;
+  }
+  const took = secs(testRun.endedAt - testRun.startedAt);
+  box.append(h('div', { class: 'testbox ' + (testRun.ok ? 'ok' : 'err') },
+    h('div', { class: 'meta' }, `Q: ${testRun.question} · ${testRun.ok ? 'answered' : 'failed'} in ${took}`),
+    h('div', { class: 'reply' }, testRun.ok ? testRun.reply : words(testRun.error))));
+}
+
+async function askTest(site, q) {
+  if (!q) return;
+  clearInterval(testTimer);
+  testRun = { siteId: site.id, question: q, startedAt: Date.now() };
+  const tick = () => { const b = document.getElementById('test-box'); if (b) paintTest(b, site.id); };
+  render();
+  testTimer = setInterval(tick, 200);
+  try {
+    const r = await api('/sites/' + site.id + '/test', 'POST', { question: q });
+    testRun = { ...testRun, endedAt: Date.now(), ok: !!r.ok, reply: r.reply, error: r.error };
+  } catch (e) {
+    testRun = { ...testRun, endedAt: Date.now(), ok: false, error: e.message };
+  } finally {
+    clearInterval(testTimer); testTimer = null;
+  }
+  try { await refresh(); } catch { /* signed out */ }
+  if (state) render();
 }
 
 function leadsPanel(site) {

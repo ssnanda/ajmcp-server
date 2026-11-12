@@ -16,7 +16,7 @@
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-#app { max-width: 1040px; margin: 0 auto; padding: 0 16px 48px; }
+#app { max-width: 1480px; margin: 0 auto; padding: 0 16px 48px; }
 
 /* top bar */
 .topbar { margin: 0 -16px 16px; padding: 14px 16px; background: var(--grad); color: #fff; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -158,3 +158,18 @@ label.check input { width: auto; min-height: 0; }
 .lead-foot { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: space-between; }
 .button-link { color: var(--accent); font-weight: 600; text-decoration: none; }
 .button-link:hover { text-decoration: underline; }
+
+.actions .grow { flex: 1; min-width: 160px; }
+.testbox { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--field); overflow-wrap: anywhere; }
+.testbox.ok { border-color: var(--green); }
+.testbox.err { border-color: var(--red); color: var(--red); }
+.testbox.run { border-color: var(--accent); font-weight: 600; }
+.testbox .reply { margin-top: 4px; white-space: pre-wrap; }
+.spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; vertical-align: -2px; animation: ajspin .8s linear infinite; }
+@keyframes ajspin { to { transform: rotate(360deg); } }
+
+/* Knowledge: documents on the left, add / behavior / try-it on the right (wide screens) */
+.kn { display: grid; grid-template-columns: 1fr; gap: 18px; }
+.kn h3 { font-size: 14px; margin: 0 0 8px; display: flex; gap: 8px; align-items: center; }
+.kn-side > h3:not(:first-child) { margin-top: 16px; }
+@media (min-width: 980px) { .kn { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); align-items: start; } }
