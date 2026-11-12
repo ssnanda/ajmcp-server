@@ -1,4 +1,5 @@
 import { isCliProvider, runCli, CliError } from './cli.js';
+import { buildSystemPrompt } from './knowledge.js';
 
 export class InputError extends Error {
   constructor(message, status = 400) { super(message); this.name = 'InputError'; this.status = status; }
@@ -47,6 +48,9 @@ async function fetchModel(fetchFn, url, options, timeoutMs) {
 export async function generateReply(site, messages, config, fetchFn = fetch) {
   const validated = validateMessages(messages, config);
   const provider = site.provider;
+  const prepared = buildSystemPrompt(site, validated);
+  if (prepared.direct) return { text: prepared.direct, provider, model: 'knowledge', usage: null };
+  site = { ...site, systemPrompt: prepared.system };
   if (isCliProvider(provider)) {
     try { return await runCli(site, validated, config); }
     catch (error) {

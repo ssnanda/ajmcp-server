@@ -78,6 +78,16 @@ test('admin requires login, then manages sites; tokens are hashed and work immed
   assert.equal((await call('/admin/api/sites/blog/test', 'POST')).data.ok, true);
   assert.deepEqual((await call('/admin/api/models?provider=openai')).data.models, ['gpt-a', 'gpt-b']);
 
+  const doc = await call('/admin/api/sites/blog/knowledge', 'POST', { title: 'Hours', text: 'We are open 9 to 5.' });
+  assert.equal(doc.res.status, 201);
+  const withDoc = (await call('/admin/api/state')).data.sites[0];
+  assert.equal(withDoc.knowledge[0].title, 'Hours');
+  assert.equal(JSON.stringify(withDoc).includes('open 9 to 5'), false, 'document text is not sent back in state');
+  const ask = await call('/admin/api/sites/blog/test', 'POST', { question: 'When are you open?' });
+  assert.equal(ask.data.ok, true);
+  assert.equal((await call('/admin/api/sites/blog/knowledge/' + doc.data.id, 'DELETE')).res.status, 200);
+  assert.equal((await call('/admin/api/state')).data.sites[0].knowledge.length, 0);
+
   assert.equal((await call('/admin/api/sites', 'POST', { id: 'blog' })).res.status, 409);
   assert.equal((await call('/admin/api/sites/blog', 'DELETE')).res.status, 200);
   assert.equal(config.sites.length, 0);

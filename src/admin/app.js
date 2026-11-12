@@ -81,6 +81,50 @@ async function loadModels(provider, datalist) {
   datalist.replaceChildren(...models[provider].map((m) => h('option', { value: m })));
 }
 
+const kb = (chars) => chars >= 1000 ? Math.round(chars / 1000) + ' KB' : chars + ' chars';
+
+/** Reference material for a site, plus a box to try a question against it. */
+function knowledgeBlock(site, strict, fallback) {
+  const title = h('input', { placeholder: 'Title (e.g. Pricing, FAQ, Services)' });
+  const text = h('textarea', { placeholder: 'Paste text here, or choose a .txt / .md / .csv / .json file' });
+  const file = h('input', { type: 'file', accept: '.txt,.md,.markdown,.csv,.json,.html,.htm,text/*' });
+  file.addEventListener('change', async () => {
+    const f = file.files[0];
+    if (!f) return;
+    if (f.size > 1_000_000) { notice = { kind: 'err', text: 'file too large (1 MB max)' }; render(); return; }
+    text.value = await f.text();
+    if (!title.value) title.value = f.name.replace(/\.[^.]+$/, '');
+  });
+  const question = h('input', { placeholder: 'Try a visitor question' });
+  const docs = site.knowledge.length
+    ? site.knowledge.map((d) => h('div', { class: 'doc' },
+        h('span', { class: 'grow' }, d.title), h('span', { class: 'meta' }, kb(d.chars)),
+        h('button', { class: 'danger', type: 'button', onclick: async () => {
+          if (!confirm(`Remove "${d.title}"?`)) return;
+          await run(() => api('/sites/' + site.id + '/knowledge/' + d.id, 'DELETE').then(refresh), 'Removed ' + d.title);
+        } }, 'Remove')))
+    : [h('div', { class: 'empty' }, 'No documents yet.')];
+  return h('div', { class: 'knowledge' },
+    h('h4', null, 'Knowledge ', h('span', { class: 'pill' }, `${site.knowledge.length} docs · ${kb(site.knowledgeChars)}`)),
+    ...docs,
+    h('div', { class: 'row mt' }, field('Title', title), field('File', file)),
+    h('div', null, text),
+    h('div', { class: 'actions mt' },
+      h('button', { type: 'button', onclick: () => {
+        if (!title.value.trim() || !text.value.trim()) { notice = { kind: 'err', text: 'title and text are required' }; render(); return; }
+        run(() => api('/sites/' + site.id + '/knowledge', 'POST', { title: title.value, text: text.value }).then(refresh), 'Added ' + title.value.trim());
+      } }, 'Add document')),
+    h('label', { class: 'check mt' }, strict, ' Answer only from this knowledge'),
+    h('div', { class: 'row' }, field('Fallback reply', fallback)),
+    h('div', { class: 'actions' }, question,
+      h('button', { type: 'button', onclick: () => run(async () => {
+        if (!question.value.trim()) return;
+        const r = await api('/sites/' + site.id + '/test', 'POST', { question: question.value });
+        notice = r.ok ? { kind: 'ok', text: `${site.id} answered: ${r.reply}` } : { kind: 'err', text: `${site.id}: ${words(r.error)}` };
+        await refresh();
+      }) }, 'Ask')));
+}
+
 function siteCard(site) {
   const provider = h('select', null, ...PROVIDERS.map(([p, label]) => h('option', { value: p, selected: p === site.provider }, label)));
   const list = h('datalist', { id: 'models-' + site.id });
@@ -91,6 +135,8 @@ function siteCard(site) {
   provider.addEventListener('change', refreshList);
   model.addEventListener('focus', refreshList, { once: true });
 
+  const strict = h('input', { type: 'checkbox', checked: site.strict || null });
+  const fallback = h('input', { value: site.fallback, placeholder: 'Reply when the answer is not in the knowledge' });
   const s = site.stats;
   const details = h('details', { class: 'site ' + site.provider + (site.disabled ? ' off' : ''), open: open.has(site.id) || null },
     h('summary', null,
@@ -101,9 +147,10 @@ function siteCard(site) {
       h('span', { class: 'meta' }, s.requests ? `${s.requests} req · ${s.errors} err` + (s.lastErrorCode ? ` · last: ${s.lastErrorCode}` : '') : 'no requests yet')),
     h('div', { class: 'body' },
       h('div', { class: 'row' }, field('Provider', provider), field('Model', model), list),
-      h('div', null, h('label', null, 'System prompt'), prompt),
+      h('div', null, h('label', null, 'Instructions (system prompt)'), prompt),
+      knowledgeBlock(site, strict, fallback),
       h('div', { class: 'actions mt' },
-        h('button', { class: 'primary', type: 'button', onclick: () => run(() => api('/sites/' + site.id, 'PUT', { provider: provider.value, model: model.value, systemPrompt: prompt.value }).then(refresh), 'Saved ' + site.id) }, 'Save'),
+        h('button', { class: 'primary', type: 'button', onclick: () => run(() => api('/sites/' + site.id, 'PUT', { provider: provider.value, model: model.value, systemPrompt: prompt.value, strict: strict.checked, fallback: fallback.value }).then(refresh), 'Saved ' + site.id) }, 'Save'),
         h('button', { type: 'button', onclick: () => run(async () => {
           const r = await api('/sites/' + site.id + '/test', 'POST');
           notice = r.ok ? { kind: 'ok', text: `${site.id}: model replied “${r.reply}” (${r.model})` } : { kind: 'err', text: `${site.id}: test failed — ${words(r.error)}` };

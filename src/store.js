@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { tokenHash } from './auth.js';
+import { LIMITS } from './knowledge.js';
 
 export class StoreError extends Error {
   constructor(code, status = 400) { super(code); this.name = 'StoreError'; this.code = code; this.status = status; }
@@ -19,7 +20,9 @@ function cleanSite(input, existing = {}) {
   if (!PROVIDERS.includes(provider)) throw new StoreError('invalid_provider');
   if (model && !MODEL_RE.test(model)) throw new StoreError('invalid_model');
   if (systemPrompt.length > 12000) throw new StoreError('system_prompt_too_long');
-  return { provider, model, systemPrompt, disabled: Boolean(input.disabled ?? existing.disabled) };
+  const fallback = String(input.fallback ?? existing.fallback ?? '').trim();
+  if (fallback.length > 500) throw new StoreError('fallback_too_long');
+  return { provider, model, systemPrompt, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback };
 }
 
 // Normalizes a runtime site (seed file token or stored hash) to the persisted shape. Never keeps a plain token.
@@ -32,6 +35,9 @@ function toStored(site) {
     model: site.model || '',
     systemPrompt: site.systemPrompt || '',
     disabled: Boolean(site.disabled),
+    strict: site.strict !== false,
+    fallback: site.fallback || '',
+    knowledge: Array.isArray(site.knowledge) ? site.knowledge.map((d) => ({ id: String(d.id), title: String(d.title), text: String(d.text), updatedAt: d.updatedAt || null })) : [],
     createdAt: site.createdAt || new Date().toISOString()
   };
 }
@@ -116,6 +122,33 @@ export class SettingsStore {
     sites[index] = { ...sites[index], ...cleanSite(input, sites[index]) };
     this.write({ ...this.state, sites });
     return sites[index];
+  }
+
+  addDoc(id, input) {
+    const title = String(input.title || '').trim().slice(0, 120);
+    const text = String(input.text || '').replace(/\r\n/g, '\n').trim();
+    if (!title) throw new StoreError('title_required');
+    if (!text) throw new StoreError('text_required');
+    if (text.length > LIMITS.docChars) throw new StoreError('document_too_large', 413);
+    const sites = this.sites();
+    const index = sites.findIndex((s) => s.id === id);
+    if (index < 0) throw new StoreError('site_not_found', 404);
+    const docs = sites[index].knowledge;
+    if (docs.length >= LIMITS.docs) throw new StoreError('too_many_documents');
+    if (docs.reduce((n, d) => n + d.text.length, 0) + text.length > LIMITS.totalChars) throw new StoreError('knowledge_full', 413);
+    const doc = { id: randomBytes(6).toString('hex'), title, text, updatedAt: new Date().toISOString() };
+    sites[index] = { ...sites[index], knowledge: [...docs, doc] };
+    this.write({ ...this.state, sites });
+    return doc;
+  }
+
+  removeDoc(id, docId) {
+    const sites = this.sites();
+    const index = sites.findIndex((s) => s.id === id);
+    if (index < 0) throw new StoreError('site_not_found', 404);
+    if (!sites[index].knowledge.some((d) => d.id === docId)) throw new StoreError('document_not_found', 404);
+    sites[index] = { ...sites[index], knowledge: sites[index].knowledge.filter((d) => d.id !== docId) };
+    this.write({ ...this.state, sites });
   }
 
   rotateToken(id) {

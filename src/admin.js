@@ -5,6 +5,7 @@ import { StoreError, KEY_PROVIDERS } from './store.js';
 import { CliError, cliStatus, cliModels, isCliProvider, runCli, saveCodexAuth } from './cli.js';
 import { generateReply, ProviderError, InputError } from './provider.js';
 import { APP_VERSION } from './version.js';
+import { knowledgeChars } from './knowledge.js';
 
 const asset = (name) => readFileSync(new URL(`./admin/${name}`, import.meta.url));
 const ASSETS = {
@@ -101,7 +102,9 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
 
   const siteView = (site) => ({
     id: site.id, provider: site.provider, model: site.model, systemPrompt: site.systemPrompt,
-    disabled: Boolean(site.disabled), tokenHint: site.tokenHint || '', createdAt: site.createdAt || null,
+    disabled: Boolean(site.disabled), strict: site.strict !== false, fallback: site.fallback || '',
+    knowledge: (site.knowledge || []).map((d) => ({ id: d.id, title: d.title, chars: d.text.length })), knowledgeChars: knowledgeChars(site.knowledge || []),
+    tokenHint: site.tokenHint || '', createdAt: site.createdAt || null,
     stats: stats.get(site.id)
   });
 
@@ -173,7 +176,9 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
       return send(res, 200, { models: await listModels(provider) });
     }
 
-    const body = method === 'GET' || method === 'DELETE' ? {} : await readBody(req, config.maxRequestBytes);
+    // Knowledge documents can be large; everything else stays within the normal request limit.
+    const bodyLimit = /\/knowledge$/.test(path) ? 1_048_576 : config.maxRequestBytes;
+    const body = method === 'GET' || method === 'DELETE' ? {} : await readBody(req, bodyLimit);
     const isObject = body && typeof body === 'object' && !Array.isArray(body);
     if (!isObject) throw new AdminError('invalid_request');
 
@@ -181,11 +186,13 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
       const { site, token } = store.addSite(body);
       return send(res, 201, { site: siteView(site), token });
     }
-    const siteMatch = /^\/admin\/api\/sites\/([a-z0-9][a-z0-9-_]{1,63})(\/rotate|\/test)?$/.exec(path);
+    const siteMatch = /^\/admin\/api\/sites\/([a-z0-9][a-z0-9-_]{1,63})(\/rotate|\/test|\/knowledge(?:\/[a-f0-9]{12})?)?$/.exec(path);
     if (siteMatch) {
       const [, id, action] = siteMatch;
       if (method === 'PUT' && !action) return send(res, 200, { site: siteView(store.updateSite(id, body)) });
       if (method === 'DELETE' && !action) { store.removeSite(id); return send(res, 200, { ok: true }); }
+      if (method === 'POST' && action === '/knowledge') { const doc = store.addDoc(id, body); return send(res, 201, { id: doc.id, title: doc.title, chars: doc.text.length }); }
+      if (method === 'DELETE' && action && action.startsWith('/knowledge/')) { store.removeDoc(id, action.slice('/knowledge/'.length)); return send(res, 200, { ok: true }); }
       if (method === 'POST' && action === '/rotate') {
         const { site, token } = store.rotateToken(id);
         return send(res, 200, { site: siteView(site), token });
@@ -193,8 +200,9 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
       if (method === 'POST' && action === '/test') {
         const site = findSite(id);
         try {
-          const reply = await generateReply(site, [{ role: 'user', content: 'Reply with the single word OK.' }], config, fetchFn);
-          return send(res, 200, { ok: true, model: reply.model, reply: reply.text.slice(0, 80) });
+          const custom = typeof body.question === 'string' && body.question.trim() ? body.question.trim().slice(0, 500) : '';
+          const reply = await generateReply(site, [{ role: 'user', content: custom || 'Reply with the single word OK.' }], config, fetchFn);
+          return send(res, 200, { ok: true, model: reply.model, reply: reply.text.slice(0, custom ? 2000 : 80) });
         } catch (error) {
           if (error instanceof ProviderError || error instanceof InputError) return send(res, 200, { ok: false, error: error.code || error.message });
           throw error;

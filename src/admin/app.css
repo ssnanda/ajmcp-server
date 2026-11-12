@@ -114,3 +114,11 @@ details.fold[open] > summary::before { transform: rotate(90deg); }
 details.fold > summary .grow { flex: 1; }
 details.fold > summary .sum { display: flex; gap: 6px; text-transform: none; letter-spacing: 0; font-weight: 400; }
 details.fold > .grid2 { padding: 0 14px 14px; }
+
+/* knowledge */
+.knowledge { margin-top: 10px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); }
+.knowledge h4 { margin: 0 0 8px; font-size: 13px; display: flex; gap: 8px; align-items: center; }
+.doc { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.doc .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+label.check { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; }
+label.check input { width: auto; min-height: 0; }
