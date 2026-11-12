@@ -7,6 +7,7 @@ import { runAgent, installedToolVersions } from './agents.js';
 import { handleMcp } from './mcp.js';
 import { APP_VERSION } from './version.js';
 import { createAdmin, Stats } from './admin.js';
+import { runAssistantTurn } from './assistant.js';
 import { SettingsStore } from './store.js';
 
 function json(res, status, data, requestId) {
@@ -101,7 +102,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
         return json(res, status, {
           version: APP_VERSION, id: identity.id,
           kind: identity.kind, provider: identity.kind === 'site' ? identity.site.provider : null,
-          endpoints: ['/v1/chat', '/v1/ajcore/reply', '/mcp'],
+          endpoints: ['/v1/chat', '/v1/ajcore/reply', '/v1/assistant', '/mcp'],
           agentsEnabled: identity.kind === 'admin' && config.enableAgentJobs
         }, id);
       }
@@ -129,6 +130,20 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
             ...(ajcore ? { sessionId: ajcore.sessionId, reply: reply.text, senderName: 'AJMCP AI' } : { reply: reply.text }),
             provider: reply.provider, model: reply.model, usage: reply.usage
           }, id);
+        } finally { slot.release(); }
+      }
+      if (req.method === 'POST' && path === '/v1/assistant') {
+        const site = authorizeSite(identity);
+        if (!site) { status = 403; return json(res, status, { error: 'site_token_required' }, id); }
+        const body = await readBody(req, config.maxAssistantChars + 40000);
+        const slot = limiter.acquire(identity);
+        if (!slot.ok) { status = slot.status; return json(res, status, { error: slot.code }, id); }
+        try {
+          let turn;
+          try { turn = await runAssistantTurn(site, body, config, fetchFn); }
+          catch (error) { stats.fail(site.id, error.code || error.message); throw error; }
+          stats.ok(site.id);
+          status = 200; return json(res, status, { requestId: id, site: site.id, ...turn }, id);
         } finally { slot.release(); }
       }
       if (req.method === 'POST' && path === '/v1/agents/run') {

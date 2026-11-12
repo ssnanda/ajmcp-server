@@ -48,7 +48,7 @@ async function fetchModel(fetchFn, url, options, timeoutMs) {
 export async function generateReply(site, messages, config, fetchFn = fetch) {
   const validated = validateMessages(messages, config);
   const provider = site.provider;
-  const prepared = buildSystemPrompt(site, validated);
+  const prepared = site.assistant ? { system: site.systemPrompt } : buildSystemPrompt(site, validated);
   if (prepared.direct) return { text: prepared.direct, provider, model: 'knowledge', usage: null };
   site = { ...site, systemPrompt: prepared.system };
   if (isCliProvider(provider)) {
@@ -63,7 +63,7 @@ export async function generateReply(site, messages, config, fetchFn = fetch) {
 
   if (provider === 'openai') {
     if (!config.openaiApiKey) throw new ProviderError('provider_not_configured', 503);
-    const body = { model, input: validated, max_output_tokens: 1024 };
+    const body = { model, input: validated, max_output_tokens: site.assistant ? 8000 : 1024 };
     if (site.systemPrompt) body.instructions = site.systemPrompt;
     const data = await fetchModel(fetchFn, 'https://api.openai.com/v1/responses', {
       method: 'POST',
@@ -76,7 +76,7 @@ export async function generateReply(site, messages, config, fetchFn = fetch) {
   }
   if (provider === 'anthropic') {
     if (!config.anthropicApiKey) throw new ProviderError('provider_not_configured', 503);
-    const body = { model, max_tokens: 1024, messages: validated };
+    const body = { model, max_tokens: site.assistant ? 8000 : 1024, messages: validated };
     if (site.systemPrompt) body.system = site.systemPrompt;
     const data = await fetchModel(fetchFn, 'https://api.anthropic.com/v1/messages', {
       method: 'POST', headers: {

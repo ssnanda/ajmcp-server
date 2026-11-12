@@ -62,6 +62,7 @@ export function loadConfig(env = process.env, read = readFileSync) {
     maxMessages: boundedInt(env.MAX_MESSAGES, 20, 1, 100),
     maxMessageChars: boundedInt(env.MAX_MESSAGE_CHARS, 6000, 50, 50000),
     maxConcurrent: boundedInt(env.MAX_CONCURRENT, 6, 1, 100),
+    maxAssistantChars: boundedInt(env.MAX_ASSISTANT_CHARS, 80000, 1000, 500000),
     maxCliConcurrent: boundedInt(env.MAX_CLI_CONCURRENT, 2, 1, 8),
     rateLimitPerMinute: boundedInt(env.RATE_LIMIT_PER_MINUTE, 30, 1, 10000),
     providerTimeoutMs: boundedInt(env.PROVIDER_TIMEOUT_MS, 45000, 1000, 180000),

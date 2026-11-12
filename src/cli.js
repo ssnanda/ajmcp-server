@@ -49,7 +49,9 @@ export const CHAT_ROLE = 'You are a customer-facing assistant replying to a visi
 
 const withRole = (system) => (system ? `${CHAT_ROLE}\n\n${system}` : CHAT_ROLE);
 
-function buildPrompt(system, messages) {
+function buildPrompt(system, messages, raw = false) {
+  // Assistant turns already carry a complete prompt in one message: send it as is.
+  if (raw) return `${system ? `${system}\n\n` : ''}${messages[0].content}`;
   const turns = messages.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n');
   return `${system ? `${system}\n\n` : ''}Conversation so far:\n\n${turns}\n\nWrite only the assistant's next reply.`;
 }
@@ -71,12 +73,12 @@ export function runCli(site, messages, config, { spawnFn = spawn, debug = false 
     // No tools at all: the model can only answer, never read files or run commands.
     args = ['-p', '--output-format', 'text', '--tools', '', '--no-session-persistence'];
     if (model) args.push('--model', model);
-    args.push('--system-prompt', withRole(system));
-    prompt = buildPrompt('', messages);
+    args.push('--system-prompt', site.assistant ? system : withRole(system));
+    prompt = buildPrompt('', messages, Boolean(site.assistant));
   } else {
     args = ['exec', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check'];
     if (model) args.push('-m', model);
-    prompt = buildPrompt(withRole(system), messages);
+    prompt = buildPrompt(site.assistant ? system : withRole(system), messages, Boolean(site.assistant));
   }
   active += 1;
   return new Promise((resolve, reject) => {
