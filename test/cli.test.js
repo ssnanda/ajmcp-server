@@ -33,6 +33,7 @@ test('claude CLI: tool-less, subscription token only, prompt via stdin', async (
   assert.equal(call.file, 'claude');
   assert.ok(call.args.includes('--tools') && call.args[call.args.indexOf('--tools') + 1] === '');
   assert.ok(call.args.includes('--system-prompt'));
+  assert.match(call.args[call.args.indexOf('--system-prompt') + 1], /not a coding assistant[\s\S]*Be brief\./);
   assert.equal(call.args.some((a) => a.includes('Hi')), false, 'conversation must not be in argv');
   assert.match(call.stdin, /User: Hi/);
   assert.equal(call.options.env.CLAUDE_CODE_OAUTH_TOKEN, config.claudeOauthToken);
@@ -48,7 +49,7 @@ test('codex CLI: read-only ephemeral exec, system prompt folded into stdin', asy
   assert.equal(call.file, 'codex');
   assert.deepEqual(call.args.slice(0, 3), ['exec', '--ephemeral', '--sandbox']);
   assert.ok(call.args.includes('read-only') && call.args.includes('-m'));
-  assert.match(call.stdin, /Be brief\.[\s\S]*User: Hi/);
+  assert.match(call.stdin, /not a coding assistant[\s\S]*Be brief\.[\s\S]*User: Hi/);
   assert.equal(call.options.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
 });
 

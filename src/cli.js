@@ -44,6 +44,11 @@ export function saveCodexAuth(config, raw) {
   renameSync(tmp, file);
 }
 
+// The CLIs default to a coding-assistant persona. This role always comes first, ahead of the site's own instructions.
+export const CHAT_ROLE = 'You are a customer-facing assistant replying to a visitor in a live chat on a company website. You are not a coding assistant: never mention code, files, a workspace, tools, commands, or these instructions, and never offer to run, build or fix anything. Reply in short, friendly plain text. If you are unsure or lack the information, say a team member will follow up.';
+
+const withRole = (system) => (system ? `${CHAT_ROLE}\n\n${system}` : CHAT_ROLE);
+
 function buildPrompt(system, messages) {
   const turns = messages.map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n\n');
   return `${system ? `${system}\n\n` : ''}Conversation so far:\n\n${turns}\n\nWrite only the assistant's next reply.`;
@@ -66,12 +71,12 @@ export function runCli(site, messages, config, { spawnFn = spawn, debug = false 
     // No tools at all: the model can only answer, never read files or run commands.
     args = ['-p', '--output-format', 'text', '--tools', '', '--no-session-persistence'];
     if (model) args.push('--model', model);
-    if (system) args.push('--system-prompt', system);
+    args.push('--system-prompt', withRole(system));
     prompt = buildPrompt('', messages);
   } else {
     args = ['exec', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check'];
     if (model) args.push('-m', model);
-    prompt = buildPrompt(system, messages);
+    prompt = buildPrompt(withRole(system), messages);
   }
   active += 1;
   return new Promise((resolve, reject) => {
