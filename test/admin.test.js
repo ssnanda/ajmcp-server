@@ -154,3 +154,41 @@ test('a remembered login survives a server restart; a password change signs othe
   t.after(() => third.close());
   assert.equal((await fetch(`http://127.0.0.1:${third.address().port}/admin/api/state`, { headers: { cookie } })).status, 401);
 });
+
+test('named access tokens: AJOps gets its own, replacing keeps one per label, revoking stops it, the primary token is untouched', async (t) => {
+  const f = await fixture();
+  t.after(() => f.server.close());
+  const { url, call } = f;
+  await call('/admin/api/login', 'POST', { username: 'admin', password: 'correct horse battery' });
+  const site = await call('/admin/api/sites', 'POST', { id: 'ncllcagents', provider: 'openai', model: 'm' });
+  const primary = site.data.token;
+  const chat = (token) => fetch(url + '/v1/site/config', { headers: { authorization: `Bearer ${token}` } });
+
+  const first = await call('/admin/api/sites/ncllcagents/tokens', 'POST', { label: 'AJOps' });
+  assert.equal(first.res.status, 201);
+  assert.match(first.data.token, /^[a-f0-9]{64}$/);
+  assert.equal((await chat(first.data.token)).status, 200, 'the new token works');
+  assert.equal((await chat(primary)).status, 200, 'the primary token still works');
+
+  // Connecting again replaces the old AJOps token instead of piling up.
+  const second = await call('/admin/api/sites/ncllcagents/tokens', 'POST', { label: 'AJOps', replace: true });
+  assert.equal((await chat(second.data.token)).status, 200);
+  assert.equal((await chat(first.data.token)).status, 401, 'the replaced token no longer works');
+  const listed = (await call('/admin/api/state')).data.sites[0].tokens;
+  assert.deepEqual(listed.map((x) => x.label), ['AJOps']);
+  assert.equal(JSON.stringify(listed).includes(second.data.token), false, 'tokens are never listed in full');
+
+  assert.equal((await call('/admin/api/sites/ncllcagents/tokens', 'POST', { label: '<script>' })).res.status, 400);
+  assert.equal((await call('/admin/api/sites/missing/tokens', 'POST', { label: 'AJOps' })).res.status, 404);
+
+  const revoked = await call(`/admin/api/sites/ncllcagents/tokens/${listed[0].id}`, 'DELETE');
+  assert.equal(revoked.res.status, 200);
+  assert.equal((await chat(second.data.token)).status, 401, 'a revoked token stops working immediately');
+  assert.equal((await chat(primary)).status, 200);
+
+  // Disabling the site turns every token off; extra tokens are stored only as hashes.
+  const third = await call('/admin/api/sites/ncllcagents/tokens', 'POST', { label: 'Test' });
+  assert.equal(readFileSync(join(f.dir, 'settings.json'), 'utf8').includes(third.data.token), false);
+  await call('/admin/api/sites/ncllcagents', 'PUT', { disabled: true });
+  assert.equal((await chat(third.data.token)).status, 401);
+});

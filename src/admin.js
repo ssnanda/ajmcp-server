@@ -135,6 +135,7 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
     leadCapture: Boolean(site.leadCapture), leadInstructions: site.leadInstructions || '',
     knowledge: (site.knowledge || []).map((d) => ({ id: d.id, title: d.title, chars: d.text.length })), knowledgeChars: knowledgeChars(site.knowledge || []),
     tokenHint: site.tokenHint || '', createdAt: site.createdAt || null,
+    tokens: (site.tokens || []).map((t) => ({ id: t.id, label: t.label, hint: t.tokenHint, createdAt: t.createdAt })),
     stats: stats.get(site.id)
   });
 
@@ -219,11 +220,16 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
       const { site, token } = store.addSite(body);
       return send(res, 201, { site: siteView(site), token });
     }
-    const siteMatch = /^\/admin\/api\/sites\/([a-z0-9][a-z0-9-_]{1,63})(\/rotate|\/test|\/knowledge(?:\/[a-f0-9]{12})?)?$/.exec(path);
+    const siteMatch = /^\/admin\/api\/sites\/([a-z0-9][a-z0-9-_]{1,63})(\/rotate|\/test|\/tokens(?:\/[a-f0-9]{12})?|\/knowledge(?:\/[a-f0-9]{12})?)?$/.exec(path);
     if (siteMatch) {
       const [, id, action] = siteMatch;
       if (method === 'PUT' && !action) return send(res, 200, { site: siteView(store.updateSite(id, body)) });
       if (method === 'DELETE' && !action) { store.removeSite(id); return send(res, 200, { ok: true }); }
+      if (method === 'POST' && action === '/tokens') {
+        const { token, entry } = store.addToken(id, body.label, { replace: body.replace === true });
+        return send(res, 201, { token, id: entry.id, label: entry.label, hint: entry.tokenHint });
+      }
+      if (method === 'DELETE' && action && action.startsWith('/tokens/')) { store.removeToken(id, action.slice('/tokens/'.length)); return send(res, 200, { ok: true }); }
       if (method === 'POST' && action === '/knowledge') { const doc = store.addDoc(id, body); return send(res, 201, { id: doc.id, title: doc.title, chars: doc.text.length }); }
       if (method === 'DELETE' && action && action.startsWith('/knowledge/')) { store.removeDoc(id, action.slice('/knowledge/'.length)); return send(res, 200, { ok: true }); }
       if (method === 'POST' && action === '/rotate') {

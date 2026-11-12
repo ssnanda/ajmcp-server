@@ -174,3 +174,49 @@ test('site API: the plugin reads and edits its own AI behavior and knowledge wit
   assert.equal((await f.post('/v1/site/knowledge/' + id, null, TOKEN, 'DELETE')).status, 200);
   assert.equal((await f.post('/v1/site/config', null, 'x'.repeat(64), 'GET')).status, 401);
 });
+
+// ── Text messages (AJPhone) and human handoff ────────────────────────────────
+import { cleanSms, extractHandoff } from '../src/chat.js';
+
+test('cleanSms: formatting removed, one tidy line, cut to a whole sentence', () => {
+  assert.equal(cleanSms('**Registered Agent** is $98/year.\n\n- Fast\n- Reliable\nSee [our page](https://ncllcagents.com/service/).'), 'Registered Agent is $98/year. Fast Reliable See our page https://ncllcagents.com/service/.');
+  const long = 'This is a sentence. '.repeat(60);
+  const out = cleanSms(long, 100);
+  assert.ok(out.length <= 100 && out.endsWith('.'), 'cut at a sentence end');
+  assert.equal(cleanSms('Plain text stays.'), 'Plain text stays.');
+});
+
+test('extractHandoff: the tag is removed and its reason returned', () => {
+  assert.deepEqual(extractHandoff('A team member will follow up. <handoff>asked for a person</handoff>'), { visible: 'A team member will follow up.', reason: 'asked for a person' });
+  assert.deepEqual(extractHandoff('No tag here.'), { visible: 'No tag here.', reason: null });
+});
+
+test('text channel: short plain-text rules are added and the reply is cleaned', async (t) => {
+  const f = await fixture('**Registered Agent** is $98 per year.\n\n- Includes our NC address\nSign up at https://ncllcagents.com/service/');
+  t.after(() => f.server.close());
+  const { status, data } = await f.post('/v1/chat', { messages: [{ role: 'user', content: 'how much for a registered agent' }], channel: 'sms', conversationId: 'sms:+17045550101' });
+  assert.equal(status, 200);
+  assert.match(f.calls[0].instructions, /CHANNEL: TEXT MESSAGE/);
+  assert.match(f.calls[0].instructions, /NC LLC Agents assistant/, 'the site prompt and knowledge still apply');
+  assert.equal(data.reply, 'Registered Agent is $98 per year. Includes our NC address Sign up at https://ncllcagents.com/service/');
+  assert.equal(data.handoff, undefined);
+});
+
+test('web chat is unchanged: no text-message rules, no handoff rules', async (t) => {
+  const f = await fixture('Hello **there**.');
+  t.after(() => f.server.close());
+  const { data } = await f.post('/v1/chat', { messages: [{ role: 'user', content: 'hi' }] });
+  assert.equal(f.calls[0].instructions.includes('CHANNEL: TEXT MESSAGE'), false);
+  assert.equal(f.calls[0].instructions.includes('HUMAN HANDOFF'), false);
+  assert.equal(data.reply, 'Hello **there**.', 'web chat keeps its formatting');
+});
+
+test('handoff: asked for only by callers that can act on it, and reported separately from the text', async (t) => {
+  const f = await fixture('Sorry about that. A team member will follow up shortly. <handoff>customer upset about billing</handoff>');
+  t.after(() => f.server.close());
+  const { data } = await f.post('/v1/chat', { messages: [{ role: 'user', content: 'this is the third time, I want a person' }], channel: 'sms', handoff: true, conversationId: 'sms:+17045550101' });
+  assert.match(f.calls[0].instructions, /HUMAN HANDOFF/);
+  assert.equal(data.reply, 'Sorry about that. A team member will follow up shortly.');
+  assert.equal(data.handoff, 'customer upset about billing');
+  assert.equal(data.reply.includes('<handoff>'), false);
+});

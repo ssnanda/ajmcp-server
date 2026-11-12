@@ -40,6 +40,8 @@ function toStored(site) {
     strict: site.strict !== false,
     fallback: site.fallback || '',
     leadCapture: Boolean(site.leadCapture),
+    // Extra named access tokens (for example one for AJOps), alongside the primary token above.
+    tokens: Array.isArray(site.tokens) ? site.tokens.map((t) => ({ id: String(t.id), label: String(t.label), tokenHash: String(t.tokenHash), tokenHint: String(t.tokenHint || ''), createdAt: t.createdAt || null })) : [],
     leadInstructions: site.leadInstructions || '',
     knowledge: Array.isArray(site.knowledge) ? site.knowledge.map((d) => ({ id: String(d.id), title: String(d.title), text: String(d.text), source: d.source === 'website' ? 'website' : 'manual', ref: d.ref ? String(d.ref) : '', updatedAt: d.updatedAt || null })) : [],
     createdAt: site.createdAt || new Date().toISOString()
@@ -222,6 +224,31 @@ export class SettingsStore {
     sites[index] = { ...sites[index], tokenHash: tokenHash(token), tokenHint: token.slice(-4) };
     this.write({ ...this.state, sites });
     return { site: sites[index], token };
+  }
+
+  /** Adds a named access token (shown once). With replace, older tokens with the same label are removed first. */
+  addToken(id, label, { replace = false } = {}) {
+    const name = String(label || '').trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/.test(name)) throw new StoreError('invalid_token_label');
+    const sites = this.sites();
+    const index = sites.findIndex((s) => s.id === id);
+    if (index < 0) throw new StoreError('site_not_found', 404);
+    const existing = replace ? sites[index].tokens.filter((t) => t.label !== name) : sites[index].tokens;
+    if (existing.length >= 10) throw new StoreError('too_many_tokens');
+    const token = randomBytes(32).toString('hex');
+    const entry = { id: randomBytes(6).toString('hex'), label: name, tokenHash: tokenHash(token), tokenHint: token.slice(-4), createdAt: new Date().toISOString() };
+    sites[index] = { ...sites[index], tokens: [...existing, entry] };
+    this.write({ ...this.state, sites });
+    return { token, entry };
+  }
+
+  removeToken(id, tokenId) {
+    const sites = this.sites();
+    const index = sites.findIndex((s) => s.id === id);
+    if (index < 0) throw new StoreError('site_not_found', 404);
+    if (!sites[index].tokens.some((t) => t.id === tokenId)) throw new StoreError('token_not_found', 404);
+    sites[index] = { ...sites[index], tokens: sites[index].tokens.filter((t) => t.id !== tokenId) };
+    this.write({ ...this.state, sites });
   }
 
   removeSite(id) {

@@ -19,10 +19,12 @@ export function identityForBearer(header, config) {
   // Sites carry either a stored tokenHash (managed in the admin UI) or a plain token (seed file).
   let matched = null;
   for (const site of config.sites) {
-    const expected = site.tokenHash ? Buffer.from(site.tokenHash, 'hex') : sha(site.token || '');
-    if (expected.length === candidateHash.length && timingSafeEqual(candidateHash, expected) && !site.disabled) {
-      matched = { kind: 'site', id: site.id, site };
-    }
+    // The primary token plus any extra named tokens. Every one is compared, so timing does not reveal which matched.
+    const hashes = [site.tokenHash ? Buffer.from(site.tokenHash, 'hex') : sha(site.token || '')];
+    for (const extra of site.tokens || []) hashes.push(Buffer.from(String(extra.tokenHash), 'hex'));
+    let hit = false;
+    for (const expected of hashes) if (expected.length === candidateHash.length && timingSafeEqual(candidateHash, expected)) hit = true;
+    if (hit && !site.disabled) matched = { kind: 'site', id: site.id, site };
   }
   return matched;
 }

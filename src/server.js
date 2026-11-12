@@ -75,7 +75,10 @@ function chatContext(body, sessionId) {
     page: /^https?:\/\//.test(page) ? page : '',
     visitor: { name: text(visitor.name, 120), email: text(visitor.email, 254), phone: text(visitor.phone, 30) },
     // The website's plugin saves leads in AJCore; it says so with leadTool: true.
-    leadTool: body.leadTool === true
+    leadTool: body.leadTool === true,
+    // Which channel the visitor is on (text messages get short plain replies) and whether the caller can act on a human handoff.
+    channel: body.channel === 'sms' ? 'sms' : 'chat',
+    handoff: body.handoff === true
   };
 }
 
@@ -157,7 +160,8 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
             requestId: id, site: site.id,
             ...(ajcore ? { sessionId: ajcore.sessionId, reply: reply.text, senderName: 'AJMCP AI' } : { reply: reply.text }),
             provider: reply.provider, model: reply.model, usage: reply.usage,
-            ...(reply.lead ? { lead: reply.lead } : {}), ...(reply.leadError ? { leadError: reply.leadError } : {})
+            ...(reply.lead ? { lead: reply.lead } : {}), ...(reply.leadError ? { leadError: reply.leadError } : {}),
+            ...(reply.handoff !== undefined ? { handoff: reply.handoff } : {})
           }, id);
         } finally { slot.release(); }
       }

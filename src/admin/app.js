@@ -183,6 +183,22 @@ function accessPanel(site) {
       h('div', null, h('label', null, 'Site id'), h('code', null, site.id)),
       h('div', null, h('label', null, 'Token'), h('code', null, '…' + (site.tokenHint || '????'))),
       h('div', null, h('label', null, 'Since last restart'), h('span', null, s.requests ? `${s.requests} requests · ${s.errors} errors` + (s.lastErrorCode ? ` · last: ${s.lastErrorCode}` : '') : 'no requests yet'))),
+    h('h3', { class: 'mt' }, 'Access tokens'),
+    h('div', { class: 'meta' }, 'Each system that talks to this site (AJOps, the WordPress plugin) can have its own token, so one can be revoked without touching the others.'),
+    h('div', { class: 'doc' }, h('span', { class: 'grow' }, 'Primary token'), h('span', { class: 'meta' }, '…' + (site.tokenHint || '????'))),
+    ...(site.tokens || []).map((t) => h('div', { class: 'doc' },
+      h('span', { class: 'grow' }, t.label), h('span', { class: 'meta' }, '…' + (t.hint || '????')),
+      h('button', { class: 'danger', type: 'button', onclick: async () => {
+        if (!confirm(`Revoke the "${t.label}" token? Whatever uses it stops working immediately.`)) return;
+        await run(() => api('/sites/' + site.id + '/tokens/' + t.id, 'DELETE').then(refresh), 'Revoked ' + t.label);
+      } }, 'Revoke'))),
+    (() => {
+      const label = h('input', { placeholder: 'Name (e.g. AJOps)' });
+      return h('div', { class: 'actions mt' }, label, h('button', { type: 'button', onclick: () => {
+        if (!label.value.trim()) { notice = { kind: 'err', text: 'give the token a name' }; render(); return; }
+        run(async () => { const r = await api('/sites/' + site.id + '/tokens', 'POST', { label: label.value.trim() }); notice = { kind: 'ok', text: `Token "${r.label}" for ${site.id} (shown once):`, secret: r.token }; await refresh(); });
+      } }, 'Add token'));
+    })(),
     h('div', { class: 'actions mt' },
       h('button', { class: 'primary', type: 'button', onclick: () => run(async () => {
         const r = await api('/sites/' + site.id + '/test', 'POST');
