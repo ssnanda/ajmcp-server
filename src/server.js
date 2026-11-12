@@ -4,13 +4,12 @@ import { identityForBearer, authorizeSite } from './auth.js';
 import { Limiter } from './limits.js';
 import { InputError } from './provider.js';
 import { runChat } from './chat.js';
-import { AjcoreClient } from './ajcore.js';
-import { LeadLog } from './leadlog.js';
-import { LeadService } from './leads.js';
+import { LeadLimiter } from './leads.js';
 import { runAgent, installedToolVersions } from './agents.js';
 import { handleMcp } from './mcp.js';
 import { APP_VERSION } from './version.js';
 import { createAdmin, Stats } from './admin.js';
+import { handleSiteApi } from './siteapi.js';
 import { runAssistantTurn } from './assistant.js';
 import { SettingsStore } from './store.js';
 
@@ -74,18 +73,19 @@ function chatContext(body, sessionId) {
     conversationId: sessionId ? String(sessionId) : text(body.conversationId, 64),
     siteUuid: /^[A-Za-z0-9-]{8,100}$/.test(siteUuid) ? siteUuid : '',
     page: /^https?:\/\//.test(page) ? page : '',
-    visitor: { name: text(visitor.name, 120), email: text(visitor.email, 254), phone: text(visitor.phone, 30) }
+    visitor: { name: text(visitor.name, 120), email: text(visitor.email, 254), phone: text(visitor.phone, 30) },
+    // The website's plugin saves leads in AJCore; it says so with leadTool: true.
+    leadTool: body.leadTool === true
   };
 }
 
-export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAgent, mcpHandler = handleMcp, toolVersions = installedToolVersions, store = new SettingsStore(config), ajcore, leadLog = new LeadLog(config.dataDir) } = {}) {
+export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAgent, mcpHandler = handleMcp, toolVersions = installedToolVersions, store = new SettingsStore(config) } = {}) {
   const limiter = new Limiter(config);
   const stats = new Stats();
-  const ajcoreClient = ajcore || new AjcoreClient(() => store.ajcoreConfig(), fetchFn);
-  const leads = new LeadService({ ajcore: ajcoreClient, log: leadLog });
+  const leadLimiter = new LeadLimiter();
   // The admin UI exists only when ADMIN_USER / ADMIN_PASSWORD_HASH are configured (see DATA_DIR).
   const admin = config.adminUser
-    ? createAdmin({ config, store, stats, fetchFn, readBody, ajcore: ajcoreClient, leadLog })
+    ? createAdmin({ config, store, stats, fetchFn, readBody })
     : null;
   return http.createServer(async (req, res) => {
     const id = randomUUID();
@@ -130,6 +130,14 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
         if (identity.kind !== 'admin') { status = 403; return json(res, status, { error: 'admin_required' }, id); }
         status = 200; return json(res, status, { tools: await toolVersions() }, id);
       }
+      // The website's plugin edits its own site's behavior and knowledge here (a site token can only reach its own site).
+      if (path.startsWith('/v1/site/')) {
+        const site = authorizeSite(identity);
+        if (!site) { status = 403; return json(res, status, { error: 'site_token_required' }, id); }
+        const result = await handleSiteApi({ req, path, site, store, config, readBody, limiter, identity });
+        if (!result) { status = 404; return json(res, status, { error: 'not_found' }, id); }
+        status = result.status; return json(res, status, result.body, id);
+      }
       if (req.method === 'POST' && (path === '/v1/chat' || path === '/v1/ajcore/reply')) {
         const site = authorizeSite(identity);
         if (!site) { status = 403; return json(res, status, { error: 'site_token_required' }, id); }
@@ -141,7 +149,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
           if (!ajcore && (!body || typeof body !== 'object' || Array.isArray(body))) throw new InputError('invalid_request');
           // Clients cannot choose provider, model, system instructions or another tenant.
           let reply;
-          try { reply = await runChat({ site, messages: ajcore ? ajcore.messages : body.messages, context: chatContext(body, ajcore ? ajcore.sessionId : 0), config, fetchFn, leads }); }
+          try { reply = await runChat({ site, messages: ajcore ? ajcore.messages : body.messages, context: chatContext(body, ajcore ? ajcore.sessionId : 0), config, fetchFn, limiter: leadLimiter }); }
           catch (error) { stats.fail(site.id, error.code || error.message); throw error; }
           stats.ok(site.id);
           status = 200;
@@ -149,7 +157,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
             requestId: id, site: site.id,
             ...(ajcore ? { sessionId: ajcore.sessionId, reply: reply.text, senderName: 'AJMCP AI' } : { reply: reply.text }),
             provider: reply.provider, model: reply.model, usage: reply.usage,
-            ...(reply.lead ? { lead: reply.lead } : {})
+            ...(reply.lead ? { lead: reply.lead } : {}), ...(reply.leadError ? { leadError: reply.leadError } : {})
           }, id);
         } finally { slot.release(); }
       }

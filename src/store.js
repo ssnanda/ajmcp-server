@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { tokenHash } from './auth.js';
 import { LIMITS } from './knowledge.js';
-import { normalizeBase } from './ajcore.js';
 
 export class StoreError extends Error {
   constructor(code, status = 400) { super(code); this.name = 'StoreError'; this.code = code; this.status = status; }
@@ -25,9 +24,7 @@ function cleanSite(input, existing = {}) {
   if (fallback.length > 500) throw new StoreError('fallback_too_long');
   const leadInstructions = String(input.leadInstructions ?? existing.leadInstructions ?? '');
   if (leadInstructions.length > 4000) throw new StoreError('lead_instructions_too_long');
-  const ajcoreSiteUuid = String(input.ajcoreSiteUuid ?? existing.ajcoreSiteUuid ?? '').trim();
-  if (ajcoreSiteUuid && !/^[A-Za-z0-9-]{8,100}$/.test(ajcoreSiteUuid)) throw new StoreError('invalid_site_uuid');
-  return { provider, model, systemPrompt, leadCapture: Boolean(input.leadCapture ?? existing.leadCapture), leadInstructions, ajcoreSiteUuid, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback };
+  return { provider, model, systemPrompt, leadCapture: Boolean(input.leadCapture ?? existing.leadCapture), leadInstructions, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback };
 }
 
 // Normalizes a runtime site (seed file token or stored hash) to the persisted shape. Never keeps a plain token.
@@ -44,8 +41,7 @@ function toStored(site) {
     fallback: site.fallback || '',
     leadCapture: Boolean(site.leadCapture),
     leadInstructions: site.leadInstructions || '',
-    ajcoreSiteUuid: site.ajcoreSiteUuid || '',
-    knowledge: Array.isArray(site.knowledge) ? site.knowledge.map((d) => ({ id: String(d.id), title: String(d.title), text: String(d.text), updatedAt: d.updatedAt || null })) : [],
+    knowledge: Array.isArray(site.knowledge) ? site.knowledge.map((d) => ({ id: String(d.id), title: String(d.title), text: String(d.text), source: d.source === 'website' ? 'website' : 'manual', ref: d.ref ? String(d.ref) : '', updatedAt: d.updatedAt || null })) : [],
     createdAt: site.createdAt || new Date().toISOString()
   };
 }
@@ -60,7 +56,7 @@ export class SettingsStore {
     this.config = config;
     this.file = config.dataDir ? join(config.dataDir, 'settings.json') : '';
     this.env = { openai: config.openaiApiKey, anthropic: config.anthropicApiKey, claude: config.claudeOauthToken, passwordHash: config.adminPasswordHash };
-    this.state = { sites: undefined, keys: {}, passwordHash: '', passwordBase: '', ajcore: {} };
+    this.state = { sites: undefined, keys: {}, passwordHash: '', passwordBase: '' };
   }
 
   get enabled() { return Boolean(this.file); }
@@ -74,8 +70,7 @@ export class SettingsStore {
       sites: Array.isArray(data.sites) ? data.sites.map(toStored) : undefined,
       keys: { openai: String(data.keys?.openai || ''), anthropic: String(data.keys?.anthropic || ''), claude: String(data.keys?.claude || '') },
       passwordHash: String(data.passwordHash || ''),
-      passwordBase: String(data.passwordBase || ''),
-      ajcore: data.ajcore && typeof data.ajcore === 'object' ? { url: String(data.ajcore.url || ''), username: String(data.ajcore.username || ''), password: String(data.ajcore.password || '') } : {}
+      passwordBase: String(data.passwordBase || '')
     };
     this.apply();
   }
@@ -95,7 +90,7 @@ export class SettingsStore {
     try {
       mkdirSync(this.config.dataDir, { recursive: true });
       const tmp = `${this.file}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ sites: next.sites, keys: next.keys, passwordHash: next.passwordHash, passwordBase: next.passwordBase, ajcore: next.ajcore }, null, 2) + '\n', { mode: 0o600 });
+      writeFileSync(tmp, JSON.stringify({ sites: next.sites, keys: next.keys, passwordHash: next.passwordHash, passwordBase: next.passwordBase }, null, 2) + '\n', { mode: 0o600 });
       renameSync(tmp, this.file);
     } catch (error) {
       if (error instanceof StoreError) throw error;
@@ -145,10 +140,69 @@ export class SettingsStore {
     const docs = sites[index].knowledge;
     if (docs.length >= LIMITS.docs) throw new StoreError('too_many_documents');
     if (docs.reduce((n, d) => n + d.text.length, 0) + text.length > LIMITS.totalChars) throw new StoreError('knowledge_full', 413);
-    const doc = { id: randomBytes(6).toString('hex'), title, text, updatedAt: new Date().toISOString() };
+    const doc = { id: randomBytes(6).toString('hex'), title, text, source: 'manual', ref: '', updatedAt: new Date().toISOString() };
     sites[index] = { ...sites[index], knowledge: [...docs, doc] };
     this.write({ ...this.state, sites });
     return doc;
+  }
+
+  getDoc(id, docId) {
+    const site = this.sites().find((x) => x.id === id);
+    if (!site) throw new StoreError('site_not_found', 404);
+    const doc = site.knowledge.find((d) => d.id === docId);
+    if (!doc) throw new StoreError('document_not_found', 404);
+    return doc;
+  }
+
+  /** Edit a document's title and/or text in place. */
+  updateDoc(id, docId, input) {
+    const sites = this.sites();
+    const index = sites.findIndex((x) => x.id === id);
+    if (index < 0) throw new StoreError('site_not_found', 404);
+    const docs = sites[index].knowledge;
+    const at = docs.findIndex((d) => d.id === docId);
+    if (at < 0) throw new StoreError('document_not_found', 404);
+    const title = String(input.title ?? docs[at].title).trim().slice(0, 120);
+    const text = String(input.text ?? docs[at].text).replace(/\r\n/g, '\n').trim();
+    if (!title) throw new StoreError('title_required');
+    if (!text) throw new StoreError('text_required');
+    if (text.length > LIMITS.docChars) throw new StoreError('document_too_large', 413);
+    const others = docs.reduce((n, d, i) => n + (i === at ? 0 : d.text.length), 0);
+    if (others + text.length > LIMITS.totalChars) throw new StoreError('knowledge_full', 413);
+    docs[at] = { ...docs[at], title, text, updatedAt: new Date().toISOString() };
+    sites[index] = { ...sites[index], knowledge: docs };
+    this.write({ ...this.state, sites });
+    return docs[at];
+  }
+
+  /**
+   * Replace every document of one source (the website's own pages) with a fresh set, in a single write.
+   * Documents are matched by ref so ids stay stable; anything not in `docs` is removed. Manual documents are untouched.
+   */
+  syncDocs(id, source, docs) {
+    if (source !== 'website') throw new StoreError('invalid_source');
+    const sites = this.sites();
+    const index = sites.findIndex((x) => x.id === id);
+    if (index < 0) throw new StoreError('site_not_found', 404);
+    const keep = sites[index].knowledge.filter((d) => d.source !== source);
+    const previous = new Map(sites[index].knowledge.filter((d) => d.source === source).map((d) => [d.ref, d]));
+    const seen = new Set();
+    const next = [];
+    for (const input of docs) {
+      const ref = String(input.ref || '').slice(0, 80);
+      const title = String(input.title || '').trim().slice(0, 120);
+      const text = String(input.text || '').replace(/\r\n/g, '\n').trim().slice(0, LIMITS.siteDocChars);
+      if (!ref || !title || !text || seen.has(ref)) continue;
+      seen.add(ref);
+      const old = previous.get(ref);
+      next.push({ id: old ? old.id : randomBytes(6).toString('hex'), title, text, source, ref, updatedAt: old && old.text === text && old.title === title ? old.updatedAt : new Date().toISOString() });
+    }
+    if (keep.length + next.length > LIMITS.docs) throw new StoreError('too_many_documents');
+    const total = [...keep, ...next].reduce((n, d) => n + d.text.length, 0);
+    if (total > LIMITS.totalChars) throw new StoreError('knowledge_full', 413);
+    sites[index] = { ...sites[index], knowledge: [...keep, ...next] };
+    this.write({ ...this.state, sites });
+    return { count: next.length, removed: [...previous.keys()].filter((r) => !seen.has(r)).length };
   }
 
   removeDoc(id, docId) {
@@ -181,20 +235,6 @@ export class SettingsStore {
     const key = value === null ? '' : String(value).trim();
     if (key && (key.length < 20 || key.length > 2000 || /\s/.test(key))) throw new StoreError('invalid_api_key');
     this.write({ ...this.state, sites: this.state.sites ?? this.sites(), keys: { ...this.state.keys, [provider]: key } });
-  }
-
-  ajcoreConfig() { return this.state.ajcore || {}; }
-
-  /** AJCore connection used for lead capture. A blank password keeps the saved one; clear = remove everything. */
-  setAjcore(input) {
-    if (input === null) { this.write({ ...this.state, sites: this.state.sites ?? this.sites(), ajcore: {} }); return; }
-    const current = this.ajcoreConfig();
-    const url = normalizeBase(String(input.url || ''));
-    const username = String(input.username || '').trim().slice(0, 100);
-    const password = String(input.password || '') || current.password || '';
-    if (!username) throw new StoreError('username_required');
-    if (!password) throw new StoreError('password_required');
-    this.write({ ...this.state, sites: this.state.sites ?? this.sites(), ajcore: { url, username, password } });
   }
 
   setPasswordHash(hash) {

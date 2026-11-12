@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { hashPassword, verifyPassword } from './password.js';
 import { StoreError, KEY_PROVIDERS } from './store.js';
 import { CliError, cliStatus, cliModels, isCliProvider, runCli, saveCodexAuth } from './cli.js';
-import { AjcoreError } from './ajcore.js';
 import { generateReply, ProviderError, InputError } from './provider.js';
 import { APP_VERSION } from './version.js';
 import { knowledgeChars } from './knowledge.js';
@@ -73,7 +72,7 @@ function readCookie(req, name) {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function createAdmin({ config, store, stats, fetchFn = fetch, readBody, ajcore, leadLog }) {
+export function createAdmin({ config, store, stats, fetchFn = fetch, readBody }) {
   // Sessions survive restarts and deploys: they are kept (hashed) in DATA_DIR/sessions.json. Each one is
   // tied to the current admin password, so a password change or --reset-admin signs everything out.
   const sha = (value) => createHash('sha256').update(String(value)).digest('hex');
@@ -133,7 +132,7 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody, a
   const siteView = (site) => ({
     id: site.id, provider: site.provider, model: site.model, systemPrompt: site.systemPrompt,
     disabled: Boolean(site.disabled), strict: site.strict !== false, fallback: site.fallback || '',
-    leadCapture: Boolean(site.leadCapture), leadInstructions: site.leadInstructions || '', ajcoreSiteUuid: site.ajcoreSiteUuid || '',
+    leadCapture: Boolean(site.leadCapture), leadInstructions: site.leadInstructions || '',
     knowledge: (site.knowledge || []).map((d) => ({ id: d.id, title: d.title, chars: d.text.length })), knowledgeChars: knowledgeChars(site.knowledge || []),
     tokenHint: site.tokenHint || '', createdAt: site.createdAt || null,
     stats: stats.get(site.id)
@@ -144,51 +143,8 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody, a
     user: config.adminUser,
     storage: store.enabled,
     sites: store.sites().map(siteView),
-    keys: { openai: store.keyInfo('openai'), anthropic: store.keyInfo('anthropic') },
-    ajcore: ajcoreView()
+    keys: { openai: store.keyInfo('openai'), anthropic: store.keyInfo('anthropic') }
   });
-
-  const ajcoreView = () => {
-    const c = store.ajcoreConfig();
-    return { configured: Boolean(ajcore && ajcore.configured()), url: c.url || '', username: c.username || '', passwordSet: Boolean(c.password) };
-  };
-
-  /** Lead attempts for a site (from the local log) plus each lead's current details, read live from AJCore. */
-  async function siteLeads(id) {
-    findSite(id);
-    const events = leadLog.forSite(id, 50);
-    const base = (store.ajcoreConfig().url || '').replace(/\/$/, '');
-    const ids = [...new Set(events.filter((e) => e.leadId).map((e) => e.leadId))].slice(0, 25);
-    const last = new Map(events.filter((e) => e.leadId).map((e) => [e.leadId, e]).reverse());
-    const out = { configured: ajcoreView().configured, counts: leadLog.counts(id), events, leads: [], loadError: '' };
-    if (!out.configured || !ids.length) return out;
-    const load = async (leadId) => {
-      try {
-        const data = await ajcore.getLead(leadId);
-        const l = data && data.lead;
-        if (!l) return { id: leadId, unavailable: true };
-        const m = l.ajmcp || {};
-        const conversations = Object.values(m.conversations || {});
-        return {
-          id: leadId, name: l.name || '', email: l.email || '', phone: l.phone || '', company: l.company || '',
-          leadStatus: l.lead_status || '', createdAt: l.created_at || '', followUpAt: l.lead_follow_up_at || '',
-          services: m.services || [], entityStatus: m.entity_status || '', customerType: m.customer_type || '', category: m.customer_category || '',
-          contactMethod: m.preferred_contact_method || '', consent: Boolean(m.consent && m.consent.given), marketing: Boolean(m.marketing_consent),
-          summary: conversations.length ? String(conversations[conversations.length - 1].summary || '') : '',
-          noteCount: Array.isArray(data.notes) ? data.notes.length : 0,
-          lastResult: last.get(leadId) ? last.get(leadId).status : '',
-          link: base ? `${base}/wp-admin/admin.php?page=ajforms-leads&view=detail&lead_id=${leadId}` : ''
-        };
-      } catch (error) {
-        out.loadError = error instanceof AjcoreError ? error.code : 'ajcore_error';
-        return { id: leadId, unavailable: true };
-      }
-    };
-    // First one alone so a single login is shared, then the rest together.
-    out.leads.push(await load(ids[0]));
-    out.leads.push(...await Promise.all(ids.slice(1).map(load)));
-    return out;
-  }
 
   const findSite = (id) => {
     const site = store.sites().find((s) => s.id === id);
@@ -248,7 +204,6 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody, a
     }
     if (method === 'GET' && path === '/admin/api/state') return send(res, 200, stateView());
     if (method === 'GET' && path === '/admin/api/cli') return send(res, 200, await cliStatus(config));
-    if (method === 'GET' && path === '/admin/api/ajcore') return send(res, 200, ajcoreView());
     if (method === 'GET' && path === '/admin/api/models') {
       const provider = new URL(req.url, 'http://localhost').searchParams.get('provider') || '';
       return send(res, 200, { models: await listModels(provider) });
@@ -264,12 +219,11 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody, a
       const { site, token } = store.addSite(body);
       return send(res, 201, { site: siteView(site), token });
     }
-    const siteMatch = /^\/admin\/api\/sites\/([a-z0-9][a-z0-9-_]{1,63})(\/rotate|\/test|\/leads|\/knowledge(?:\/[a-f0-9]{12})?)?$/.exec(path);
+    const siteMatch = /^\/admin\/api\/sites\/([a-z0-9][a-z0-9-_]{1,63})(\/rotate|\/test|\/knowledge(?:\/[a-f0-9]{12})?)?$/.exec(path);
     if (siteMatch) {
       const [, id, action] = siteMatch;
       if (method === 'PUT' && !action) return send(res, 200, { site: siteView(store.updateSite(id, body)) });
-      if (method === 'GET' && action === '/leads') return send(res, 200, await siteLeads(id));
-      if (method === 'DELETE' && !action) { store.removeSite(id); leadLog.removeSite(id); return send(res, 200, { ok: true }); }
+      if (method === 'DELETE' && !action) { store.removeSite(id); return send(res, 200, { ok: true }); }
       if (method === 'POST' && action === '/knowledge') { const doc = store.addDoc(id, body); return send(res, 201, { id: doc.id, title: doc.title, chars: doc.text.length }); }
       if (method === 'DELETE' && action && action.startsWith('/knowledge/')) { store.removeDoc(id, action.slice('/knowledge/'.length)); return send(res, 200, { ok: true }); }
       if (method === 'POST' && action === '/rotate') {
@@ -296,18 +250,6 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody, a
         store.setKey(provider, value);
       }
       return send(res, 200, stateView().keys);
-    }
-    if (method === 'PUT' && path === '/admin/api/ajcore') {
-      if (body.clear === true) store.setAjcore(null); else store.setAjcore(body);
-      ajcore.token = '';
-      return send(res, 200, ajcoreView());
-    }
-    if (method === 'POST' && path === '/admin/api/ajcore/test') {
-      try { return send(res, 200, await ajcore.test()); }
-      catch (error) {
-        if (error instanceof AjcoreError) return send(res, 200, { ok: false, error: error.code });
-        throw error;
-      }
     }
     if (method === 'PUT' && path === '/admin/api/cli') {
       if ('claudeToken' in body) {
@@ -360,8 +302,6 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody, a
     } catch (error) {
       if (error instanceof AdminError || error instanceof StoreError || error instanceof InputError) {
         send(res, error.status || 400, { error: error.code || error.message });
-      } else if (error instanceof AjcoreError) {
-        send(res, error.status || 502, { error: error.code });
       } else if (error instanceof CliError) {
         send(res, error.status || 502, { error: error.code });
       } else if (error instanceof ProviderError) {

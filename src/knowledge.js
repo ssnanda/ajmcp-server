@@ -2,7 +2,7 @@
 // per question and only the best-matching passages are sent. In strict mode the model must answer only
 // from this material, and a question that matches nothing never reaches the model at all.
 export const DEFAULT_FALLBACK = "I don't have that information. A team member will follow up with you.";
-export const LIMITS = Object.freeze({ docs: 50, docChars: 200_000, totalChars: 500_000, inline: 60_000, budget: 40_000, chunk: 1500 });
+export const LIMITS = Object.freeze({ docs: 250, docChars: 200_000, siteDocChars: 8_000, totalChars: 500_000, inline: 60_000, budget: 40_000, chunk: 1500 });
 
 const STOP = new Set('the and for are but not you your with this that have from they will would could should what when where which who how can does did has had was were its our out all any about into than then them there their been being also just more some such only over very'.split(' '));
 const tokens = (text) => (String(text).toLowerCase().match(/[a-z0-9]{3,}/g) || []).filter((t) => !STOP.has(t));

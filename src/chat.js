@@ -1,42 +1,28 @@
-// One visitor-chat turn. Without lead capture this is a plain model call. With it, the model may answer with a
-// create_lead tool call; the server validates and runs it, hands the verified result back, and only then lets the
-// model write the visitor-facing text. A save that failed can never be reported to the visitor as a success.
-import { randomBytes } from 'node:crypto';
+// One visitor-chat turn: a plain model call, plus lead capture when it is on for the site and the website's plugin
+// says it can save leads. The reply comes back with an optional, already-validated `lead` that the plugin saves.
 import { generateReply } from './provider.js';
-import { parseAssistantOutput } from './assistant.js';
-import { LEAD_TOOL, leadPromptBlock } from './leads.js';
+import { leadPromptBlock, extractLead, validateLeadArgs } from './leads.js';
 
-const MAX_TOOL_CALLS = 2;
-// After a failed save, a reply that sounds like success is replaced; one that admits the problem is kept.
-const SOUNDS_LIKE_SUCCESS = /\b(saved|shared|submitted|recorded|forwarded|passed (it |them )?(on|along)|sent (it |them |your )|received your|got your|logged)\b/i;
-const ADMITS_PROBLEM = /\b(couldn'?t|could not|can'?t|cannot|unable|wasn'?t able|weren'?t able|not able|didn'?t|did not|failed|unfortunately|problem|trouble)\b/i;
-const FAILURE_REPLY = "I couldn't submit your details just now. Please contact our team directly and they will help you right away.";
+// The model is told not to claim a save; if it does anyway, that sentence is replaced (the plugin adds the true result).
+const CLAIMS_DONE = /\b(saved|shared|submitted|recorded|forwarded|passed (it |them )?(on|along)|sent (it |them |your )|received your|got your|logged)\b/i;
+const NEUTRAL = "Thanks. I'm passing your details to our team now.";
 
-export async function runChat({ site, messages, context = {}, config, fetchFn, leads }) {
-  if (!site.leadCapture || !leads || !leads.available()) return generateReply(site, messages, config, fetchFn);
+export async function runChat({ site, messages, context = {}, config, fetchFn, limiter }) {
+  if (!site.leadCapture || !context.leadTool) return generateReply(site, messages, config, fetchFn);
 
-  const nonce = randomBytes(6).toString('hex');
-  const turnSite = { ...site, systemPrompt: [site.systemPrompt, leadPromptBlock(site, nonce, context.visitor)].filter(Boolean).join('\n\n') };
-  const roomy = { ...config, maxMessages: config.maxMessages + 2 * (MAX_TOOL_CALLS + 1) };
-  const convo = messages.slice();
+  const turnSite = { ...site, systemPrompt: [site.systemPrompt, leadPromptBlock(site, context.visitor)].filter(Boolean).join('\n\n') };
+  const reply = await generateReply(turnSite, messages, config, fetchFn);
+  const { visible, raw, present } = extractLead(reply.text);
+  if (!present) return { ...reply, text: visible };
+
   let lead = null;
-  let failed = false;
+  let leadError = '';
+  const checked = raw ? validateLeadArgs(raw) : { ok: false, error: 'invalid_arguments' };
+  if (!checked.ok) leadError = checked.error;
+  else if (limiter && limiter.limited(site.id, context.conversationId)) leadError = 'rate_limited';
+  else lead = checked.payload;
 
-  for (let step = 0; step <= MAX_TOOL_CALLS; step++) {
-    const reply = await generateReply(turnSite, convo, roomy, fetchFn);
-    const parsed = parseAssistantOutput(reply.text, [LEAD_TOOL]);
-    if (parsed.type === 'text') {
-      const text = failed && SOUNDS_LIKE_SUCCESS.test(parsed.text) && !ADMITS_PROBLEM.test(parsed.text) ? FAILURE_REPLY : parsed.text;
-      return { ...reply, text, lead };
-    }
-    if (step === MAX_TOOL_CALLS) break;      // asked for a tool again after its results: stop and use the safe reply
-    lead = await leads.save(site, parsed.arguments, context);
-    failed = lead.status === 'failed';
-    convo.push(
-      { role: 'assistant', content: JSON.stringify({ tool: LEAD_TOOL, arguments: parsed.arguments }) },
-      { role: 'user', content: `[${nonce}] ${LEAD_TOOL} result: ${JSON.stringify(lead)}. ${failed ? 'It FAILED: do not say anything was saved.' : 'It succeeded.'} Now reply to the visitor in plain text.` }
-    );
-  }
-  const text = lead && !failed ? 'Thank you. Your details have been shared with our team.' : FAILURE_REPLY;
-  return { text, provider: site.provider, model: site.model || '', usage: null, lead };
+  // Whenever a lead is on its way (or was refused), the visible text must not announce a completed save.
+  const text = CLAIMS_DONE.test(visible) || !visible ? NEUTRAL : visible;
+  return { ...reply, text, ...(lead ? { lead } : { leadError }) };
 }
