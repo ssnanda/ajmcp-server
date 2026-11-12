@@ -95,6 +95,30 @@ export function runCli(site, messages, config, { spawnFn = spawn, debug = false 
   });
 }
 
+// Claude Code has no "list models" command: it accepts these aliases (latest model of each family) or a full model id.
+const CLAUDE_MODELS = ['fable', 'opus', 'sonnet', 'haiku', 'claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
+const modelCache = new Map();
+
+/** Model ids for the site form. Codex reports its own catalog (`codex debug models`); Claude uses the list above. */
+export async function cliModels(config, provider) {
+  if (provider === 'claude-cli') return CLAUDE_MODELS;
+  if (provider !== 'codex-cli') throw new CliError('unknown_cli', 400);
+  const hit = modelCache.get(provider);
+  if (hit && Date.now() - hit.at < 600_000) return hit.ids;
+  const ids = await new Promise((resolve) => {
+    execFile('codex', ['debug', 'models'], { timeout: 15000, maxBuffer: 2_000_000, shell: false, env: cliEnv(config, 'codex') }, (err, out) => {
+      if (err) return resolve([]);
+      try {
+        const data = JSON.parse(String(out));
+        const list = Array.isArray(data) ? data : data.models || [];
+        resolve(list.filter((m) => m && m.visibility === 'list' && typeof m.slug === 'string').map((m) => m.slug));
+      } catch { resolve([]); }
+    });
+  });
+  if (ids.length) modelCache.set(provider, { at: Date.now(), ids });
+  return ids;
+}
+
 const cache = { at: 0, value: null };
 
 function versionOf(binary) {

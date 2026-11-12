@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { hashPassword, verifyPassword } from './password.js';
 import { StoreError, KEY_PROVIDERS } from './store.js';
-import { CliError, cliStatus, runCli, saveCodexAuth } from './cli.js';
+import { CliError, cliStatus, cliModels, isCliProvider, runCli, saveCodexAuth } from './cli.js';
 import { generateReply, ProviderError, InputError } from './provider.js';
 import { APP_VERSION } from './version.js';
 
@@ -120,6 +120,7 @@ export function createAdmin({ config, store, stats, fetchFn = fetch, readBody })
   };
 
   async function listModels(provider) {
+    if (isCliProvider(provider)) return cliModels(config, provider);
     if (!KEY_PROVIDERS.includes(provider)) throw new AdminError('invalid_provider');
     const key = provider === 'openai' ? config.openaiApiKey : config.anthropicApiKey;
     if (!key) throw new AdminError('provider_not_configured', 409);

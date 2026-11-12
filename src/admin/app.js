@@ -74,8 +74,8 @@ function renderLogin(message) {
 
 /* ---------- sites ---------- */
 async function loadModels(provider, datalist) {
-  if (isCli(provider) || !state.keys[provider].set) { datalist.replaceChildren(); return; }
-  if (!models[provider]) {
+  if (!isCli(provider) && !state.keys[provider].set) { datalist.replaceChildren(); return; }
+  if (!models[provider] || !models[provider].length) {
     try { models[provider] = (await api('/models?provider=' + provider)).models; } catch { models[provider] = []; }
   }
   datalist.replaceChildren(...models[provider].map((m) => h('option', { value: m })));
@@ -84,7 +84,7 @@ async function loadModels(provider, datalist) {
 function siteCard(site) {
   const provider = h('select', null, ...PROVIDERS.map(([p, label]) => h('option', { value: p, selected: p === site.provider }, label)));
   const list = h('datalist', { id: 'models-' + site.id });
-  const model = h('input', { value: site.model, list: 'models-' + site.id, placeholder: isCli(site.provider) ? 'model id (optional)' : 'model id' });
+  const model = h('input', { value: site.model, list: 'models-' + site.id, placeholder: isCli(site.provider) ? 'blank = CLI default' : 'model id' });
   const prompt = h('textarea', null, site.systemPrompt);
   prompt.value = site.systemPrompt;
   const refreshList = () => loadModels(provider.value, list);
@@ -127,7 +127,7 @@ function addSiteForm() {
   const id = h('input', { placeholder: 'site-id', pattern: '[a-z0-9][a-z0-9_\\-]{1,63}', required: true });
   const provider = h('select', null, ...PROVIDERS.map(([p, label]) => h('option', { value: p }, label)));
   const list = h('datalist', { id: 'models-new' });
-  const model = h('input', { placeholder: 'model id', list: 'models-new' });
+  const model = h('input', { placeholder: 'blank = CLI default (API: model id)', list: 'models-new' });
   const refreshList = () => loadModels(provider.value, list);
   provider.addEventListener('change', refreshList);
   model.addEventListener('focus', refreshList);
