@@ -2,7 +2,9 @@
 const app = document.getElementById('app');
 let state = null;
 let cli = null;             // installed CLI versions + login state
-const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)']];
+const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)'], ['antigravity-cli', 'Google Antigravity (CLI)']];
+const MASTER_CHOICES = [['', 'Per assistant'], ['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Antigravity']];
+const MASTER_CLI = { claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli' };
 const isCli = (p) => p.endsWith('-cli');
 const TABS = [['sites', 'Assistants'], ['activity', 'Activity'], ['logins', 'Logins & keys'], ['account', 'Account']];
 let tab = TABS.some(([k]) => '#' + k === location.hash) ? location.hash.slice(1) : 'sites';
@@ -406,6 +408,20 @@ function treeNode(site) {
       label, key === 'knowledge' && site.knowledge.length ? h('span', { class: 'count' }, site.knowledge.length) : key === 'tests' && (site.tests || []).length ? h('span', { class: 'count' }, site.tests.length) : null))) : null);
 }
 
+/** Antigravity keeps its own cached sign-in: nothing to paste here, only a status and a test. */
+function agyRow() {
+  const info = cli && cli.antigravity;
+  const status = !info ? h('span', { class: 'pill bad' }, 'unavailable') : !info.version ? h('span', { class: 'pill bad' }, 'not installed')
+    : h('span', { class: 'pill ' + (info.loggedIn ? 'on' : 'off') }, `${info.version} · ${info.loggedIn ? 'logged in' : 'not logged in'}`);
+  return h('div', { class: 'sub' },
+    h('h3', null, 'Google Antigravity (agy)', status),
+    h('div', { class: 'meta' }, 'Sign in once on this server: open a shell in the pod (oc rsh) with HOME set to the data folder and run agy, then complete the Google sign-in. The login is cached and reused.'),
+    h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => run(async () => {
+      const r = await api('/cli/antigravity/test', 'POST');
+      notice = r.ok ? { kind: 'ok', text: `Antigravity: replied “${r.reply}”` } : { kind: 'err', text: `Antigravity: test failed — ${words(r.error)}${r.detail ? ' — ' + r.detail : ''}` };
+    }) }, 'Test')));
+}
+
 function cliRow(name, label, how, field, build) {
   const info = cli && cli[name];
   const input = h(field === 'claudeToken' ? 'input' : 'textarea', field === 'claudeToken'
@@ -458,6 +474,29 @@ function passwordForm() {
 /* ---------- main ---------- */
 function tile(tone, n, label) { return h('div', { class: 'tile ' + tone }, h('div', { class: 'n' }, n), h('div', { class: 'l' }, label)); }
 
+/* ---------- master switch: every assistant, chat, SMS, lead and agent job through one tool ---------- */
+function masterBar() {
+  const m = state.master || { provider: '', models: {}, sites: [] };
+  const choose = (provider) => run(async () => { state.master = await api('/master', 'PUT', { provider, models: m.models }); await refresh(); },
+    provider ? 'All AI now runs on ' + (MASTER_CHOICES.find(([k]) => k === provider) || [0, provider])[1] : 'Each assistant uses its own provider again');
+  const seg = h('div', { class: 'seg' }, MASTER_CHOICES.map(([key, label]) => h('button', { type: 'button', class: m.provider === key ? 'on' : '', onclick: () => { if (m.provider !== key) choose(key); } }, label)));
+  const kids = [h('div', { class: 'mhead' }, h('strong', null, 'AI master switch'), h('span', { class: 'meta' }, m.provider ? 'Everything runs on ' + m.label + ' — assistants keep their own settings and come back when this is off.' : 'Off: each assistant uses its own provider.')), seg];
+  if (m.provider) {
+    const cliKey = MASTER_CLI[m.provider];
+    const ready = cli && cli[m.provider] && cli[m.provider].loggedIn;
+    const pick = h('input', { list: 'mmodels', placeholder: 'Model (blank = tool default)', value: m.models[m.provider] || '' });
+    const list = h('datalist', { id: 'mmodels' });
+    if (models[cliKey]) models[cliKey].forEach((id) => list.append(h('option', { value: id })));
+    else api('/models?provider=' + cliKey).then((r) => { models[cliKey] = r.models || []; if (state && tab) render(); }).catch(() => { models[cliKey] = []; });
+    kids.push(h('div', { class: 'mrow' }, pick, list,
+      h('button', { type: 'button', onclick: () => run(async () => { state.master = await api('/master', 'PUT', { provider: m.provider, models: { ...m.models, [m.provider]: pick.value.trim() } }); await refresh(); }, 'Master model saved') }, 'Save model'),
+      h('span', { class: 'pill ' + (ready ? 'on' : 'off') }, ready ? 'logged in' : 'not logged in: add the login under Logins & keys')));
+    const diff = (m.sites || []).filter((s) => s.own !== s.running);
+    kids.push(h('div', { class: 'meta' }, `${(m.sites || []).length} assistant(s) on ${m.label}` + (diff.length ? ` · ${diff.length} switched from their own provider` : '') + '.'));
+  }
+  return h('section', { class: 'card master' + (m.provider ? ' is-on' : '') }, ...kids);
+}
+
 function tiles() {
   const total = state.sites.reduce((n, x) => n + x.stats.requests, 0);
   const errors = state.sites.reduce((n, x) => n + x.stats.errors, 0);
@@ -470,6 +509,7 @@ function tiles() {
     tile(errors ? 'red' : 'green', errors, 'Errors'),
     tile(cli && cli.claude.loggedIn ? 'green' : 'orange', login(cli && cli.claude), 'Claude CLI'),
     tile(cli && cli.codex.loggedIn ? 'green' : 'orange', login(cli && cli.codex), 'Codex CLI'),
+    tile(cli && cli.antigravity && cli.antigravity.loggedIn ? 'green' : 'orange', login(cli && cli.antigravity), 'Antigravity CLI'),
     tile(keys ? 'teal' : 'orange', `${keys}/2`, 'API keys set'));
 }
 
@@ -505,10 +545,11 @@ function loginsTab() {
   const keyPill = (p) => h('span', { class: 'pill ' + (state.keys[p].set ? 'on' : 'off') }, p + (state.keys[p].set ? ' ✓' : ' –'));
   return [
     collapsible('cli', 'Subscription logins (CLI)',
-      h('span', { class: 'sum' }, h('span', { class: 'pill ' + state2(cli && cli.claude) }, 'Claude'), h('span', { class: 'pill ' + state2(cli && cli.codex) }, 'Codex')),
+      h('span', { class: 'sum' }, h('span', { class: 'pill ' + state2(cli && cli.claude) }, 'Claude'), h('span', { class: 'pill ' + state2(cli && cli.codex) }, 'Codex'), h('span', { class: 'pill ' + state2(cli && cli.antigravity) }, 'Antigravity')),
       h('div', { class: 'grid2' },
         cliRow('claude', 'Claude', 'On your Mac run: claude setup-token', 'claudeToken'),
-        cliRow('codex', 'ChatGPT (Codex)', 'On your Mac run: codex login, then paste ~/.codex/auth.json', 'codexAuth'))),
+        cliRow('codex', 'ChatGPT (Codex)', 'On your Mac run: codex login, then paste ~/.codex/auth.json', 'codexAuth'),
+        agyRow())),
     collapsible('keys', 'AI provider keys',
       h('span', { class: 'sum' }, keyPill('anthropic'), keyPill('openai')),
       h('div', { class: 'grid2' }, keyRow('anthropic', 'Anthropic'), keyRow('openai', 'OpenAI')))
@@ -585,6 +626,7 @@ function render() {
     h('header', { class: 'topbar' },
       h('h1', null, 'AJMCP Admin'), h('span', { class: 'who' }, `v${state.version} · ${state.user}`),
       h('button', { type: 'button', onclick: async () => { try { await api('/logout', 'POST'); } catch { /* already out */ } state = null; renderLogin(); } }, 'Sign out')),
+    masterBar(),
     tiles(),
     notice ? h('div', { class: 'notice ' + notice.kind }, notice.text, notice.secret ? h('div', { class: 'secret' }, notice.secret) : null, notice.secret ? copyButton(notice.secret) : null) : null,
     !state.storage ? h('div', { class: 'notice err' }, 'No persistent storage: changes cannot be saved.') : null,

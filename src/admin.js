@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { hashPassword, verifyPassword } from './password.js';
 import { StoreError, KEY_PROVIDERS } from './store.js';
 import { CliError, cliStatus, cliModels, isCliProvider, runCli, saveCodexAuth } from './cli.js';
+import { masterOf, applyMaster, MASTER_LABELS } from './master.js';
 import { generateReply, ProviderError, InputError } from './provider.js';
 import { APP_VERSION } from './version.js';
 import { knowledgeChars } from './knowledge.js';
@@ -140,12 +141,22 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
     stats: stats.get(site.id)
   });
 
+  /** The master switch and what every site currently runs on (so the screen shows the real effect). */
+  const masterView = () => {
+    const m = masterOf(config);
+    return {
+      provider: m.provider, models: m.models, label: m.provider ? MASTER_LABELS[m.provider] : '',
+      sites: store.sites().map((s) => { const eff = applyMaster(s, config); return { id: s.id, own: s.provider, running: eff.provider, model: eff.model || '' }; })
+    };
+  };
+
   const stateView = () => ({
     version: APP_VERSION,
     user: config.adminUser,
     storage: store.enabled,
     sites: store.sites().map(siteView),
-    keys: { openai: store.keyInfo('openai'), anthropic: store.keyInfo('anthropic') }
+    keys: { openai: store.keyInfo('openai'), anthropic: store.keyInfo('anthropic') },
+    master: masterView()
   });
 
   const findSite = (id) => {
@@ -254,6 +265,10 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
         }
       }
     }
+    if (method === 'PUT' && path === '/admin/api/master') {
+      store.setMaster(body);
+      return send(res, 200, masterView());
+    }
     if (method === 'PUT' && path === '/admin/api/keys') {
       for (const provider of KEY_PROVIDERS) {
         if (!(provider in body)) continue;
@@ -271,7 +286,7 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
       if ('codexAuth' in body) saveCodexAuth(config, body.codexAuth);
       return send(res, 200, await cliStatus(config));
     }
-    const cliTest = /^\/admin\/api\/cli\/(claude|codex)\/test$/.exec(path);
+    const cliTest = /^\/admin\/api\/cli\/(claude|codex|antigravity)\/test$/.exec(path);
     if (method === 'POST' && cliTest) {
       const provider = `${cliTest[1]}-cli`;
       try {

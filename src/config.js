@@ -22,7 +22,7 @@ function parseSites(raw, allowEmpty = false) {
       throw new Error(`Site ${id} needs a unique random secret (32+ characters)`);
     }
     if (ids.has(id) || tokens.has(token)) throw new Error('Duplicate site id or token');
-    if (site.provider && !['openai', 'anthropic', 'claude-cli', 'codex-cli'].includes(site.provider)) throw new Error('Unknown site provider');
+    if (site.provider && !['openai', 'anthropic', 'claude-cli', 'codex-cli', 'antigravity-cli'].includes(site.provider)) throw new Error('Unknown site provider');
     ids.add(id); tokens.add(token);
     return Object.freeze({
       id, token, provider: site.provider || 'openai',
@@ -58,6 +58,8 @@ export function loadConfig(env = process.env, read = readFileSync) {
     claudeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN || '',
     openaiModel: env.OPENAI_MODEL || '',
     anthropicModel: env.ANTHROPIC_MODEL || '',
+    // Master switch (claude | codex | antigravity | empty = every site uses its own provider). The admin UI setting wins once saved.
+    master: { provider: ['claude', 'codex', 'antigravity'].includes(String(env.AI_MASTER_PROVIDER || '').toLowerCase()) ? String(env.AI_MASTER_PROVIDER).toLowerCase() : '', models: { claude: '', codex: '', antigravity: '' } },
     allowedHosts: new Set((env.ALLOWED_HOSTS || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean)),
     allowedOrigins: new Set((env.ALLOWED_ORIGINS || '').split(',').map(x => x.trim()).filter(Boolean)),
     maxRequestBytes: boundedInt(env.MAX_REQUEST_BYTES, 32768, 1024, 1_048_576),

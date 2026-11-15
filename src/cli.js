@@ -4,7 +4,7 @@ import { spawn, execFile } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 
-export const CLI_PROVIDERS = Object.freeze({ 'claude-cli': 'claude', 'codex-cli': 'codex' });
+export const CLI_PROVIDERS = Object.freeze({ 'claude-cli': 'claude', 'codex-cli': 'codex', 'antigravity-cli': 'agy' });
 export const isCliProvider = (provider) => Object.hasOwn(CLI_PROVIDERS, provider);
 
 export class CliError extends Error {
@@ -27,6 +27,7 @@ function cliEnv(config, binary) {
 export function cliLoggedIn(config, binary) {
   const home = cliHome(config);
   if (binary === 'claude') return Boolean(config.claudeOauthToken) || existsSync(join(home, '.claude', '.credentials.json'));
+  if (binary === 'agy') return existsSync(join(home, '.gemini', 'antigravity-cli')); // Antigravity keeps its cached sign-in under ~/.gemini/antigravity-cli
   return existsSync(join(home, '.codex', 'auth.json'));
 }
 
@@ -75,6 +76,13 @@ export function runCli(site, messages, config, { spawnFn = spawn, debug = false 
     if (model) args.push('--model', model);
     args.push('--system-prompt', site.assistant ? system : withRole(system));
     prompt = buildPrompt('', messages, Boolean(site.assistant));
+  } else if (binary === 'agy') {
+    // Headless print mode: the prompt is an argument (no stdin form for a single prompt); --sandbox restricts the terminal,
+    // and a headless run has no approval prompts, so any tool action that needs approval is denied.
+    args = ['--output-format', 'text', '--sandbox'];
+    if (model) args.push('--model', model);
+    prompt = buildPrompt(site.assistant ? system : withRole(system), messages, Boolean(site.assistant));
+    args.push('-p', prompt);
   } else {
     args = ['exec', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check'];
     if (model) args.push('-m', model);
@@ -98,7 +106,7 @@ export function runCli(site, messages, config, { spawnFn = spawn, debug = false 
       finish(resolve, { text: stdout.trim(), provider: site.provider, model: model || `${binary} default`, usage: null });
     });
     child.stdin?.on('error', () => { /* process exited early; close handler reports it */ });
-    child.stdin?.end(prompt);
+    child.stdin?.end(binary === 'agy' ? undefined : prompt);
   });
 }
 
@@ -109,6 +117,18 @@ const modelCache = new Map();
 /** Model ids for the site form. Codex reports its own catalog (`codex debug models`); Claude uses the list above. */
 export async function cliModels(config, provider) {
   if (provider === 'claude-cli') return CLAUDE_MODELS;
+  if (provider === 'antigravity-cli') {
+    const hit = modelCache.get(provider);
+    if (hit && Date.now() - hit.at < 600_000) return hit.ids;
+    const ids = await new Promise((resolve) => {
+      execFile('agy', ['models'], { timeout: 15000, maxBuffer: 1_000_000, shell: false, env: cliEnv(config, 'agy') }, (err, out) => {
+        if (err) return resolve([]);
+        resolve([...new Set(String(out).split(/\r?\n/).map((l) => l.trim().split(/\s+/)[0]).filter((s) => /^[A-Za-z0-9][A-Za-z0-9._:/-]{1,100}$/.test(s) && /[a-z]/.test(s) && /\d|-/.test(s)))].slice(0, 60));
+      });
+    });
+    if (ids.length) modelCache.set(provider, { at: Date.now(), ids });
+    return ids;
+  }
   if (provider !== 'codex-cli') throw new CliError('unknown_cli', 400);
   const hit = modelCache.get(provider);
   if (hit && Date.now() - hit.at < 600_000) return hit.ids;
@@ -137,11 +157,12 @@ function versionOf(binary) {
 /** Installed versions and login state for the admin screen (versions cached for a minute). */
 export async function cliStatus(config) {
   if (!cache.value || Date.now() - cache.at > 60_000) {
-    const [claude, codex] = await Promise.all([versionOf('claude'), versionOf('codex')]);
-    cache.value = { claude, codex }; cache.at = Date.now();
+    const [claude, codex, agy] = await Promise.all([versionOf('claude'), versionOf('codex'), versionOf('agy')]);
+    cache.value = { claude, codex, agy }; cache.at = Date.now();
   }
   return {
     claude: { version: cache.value.claude, loggedIn: cliLoggedIn(config, 'claude'), tokenSet: Boolean(config.claudeOauthToken) },
-    codex: { version: cache.value.codex, loggedIn: cliLoggedIn(config, 'codex') }
+    codex: { version: cache.value.codex, loggedIn: cliLoggedIn(config, 'codex') },
+    antigravity: { version: cache.value.agy, loggedIn: cliLoggedIn(config, 'agy') }
   };
 }

@@ -1,5 +1,6 @@
 import { isCliProvider, runCli, CliError } from './cli.js';
 import { buildSystemPrompt } from './knowledge.js';
+import { applyMaster } from './master.js';
 
 export class InputError extends Error {
   constructor(message, status = 400) { super(message); this.name = 'InputError'; this.status = status; }
@@ -47,6 +48,7 @@ async function fetchModel(fetchFn, url, options, timeoutMs) {
 
 export async function generateReply(site, messages, config, fetchFn = fetch) {
   const validated = validateMessages(messages, config);
+  site = applyMaster(site, config); // the master switch (when on) decides the provider and model for every call
   const provider = site.provider;
   const prepared = site.assistant ? { system: site.systemPrompt } : buildSystemPrompt(site, validated);
   if (prepared.direct) return { text: prepared.direct, provider, model: 'knowledge', usage: null };

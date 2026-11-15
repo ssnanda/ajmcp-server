@@ -1,6 +1,7 @@
 // Genuine MCP Streamable HTTP transport. Stateless: one server+transport per incoming request.
 // Site access is authenticated by the HTTP gateway before this module is invoked.
 import { generateReply } from './provider.js';
+import { applyMaster } from './master.js';
 
 export async function handleMcp(req, res, site, config, limiter, fetchFn = fetch) {
   const [{ McpServer }, { NodeStreamableHTTPServerTransport }, z] = await Promise.all([
@@ -12,7 +13,7 @@ export async function handleMcp(req, res, site, config, limiter, fetchFn = fetch
   mcp.registerTool('site_info', {
     description: 'Return the authenticated website identifier and available AI provider (read-only).',
     inputSchema: z.object({})
-  }, async () => ({ content: [{ type: 'text', text: JSON.stringify({ site: site.id, provider: site.provider }) }] }));
+  }, async () => ({ content: [{ type: 'text', text: JSON.stringify({ site: site.id, provider: applyMaster(site, config).provider }) }] }));
   mcp.registerTool('ask_site_ai', {
     description: 'Ask the configured AI model a question on behalf of the authenticated website. No WordPress write access.',
     inputSchema: z.object({ question: z.string().min(1).max(config.maxMessageChars) })

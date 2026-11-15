@@ -47,3 +47,17 @@ See [deploy/README.md](deploy/README.md), [deploy/openshift.yaml](deploy/openshi
 ## Clone and deploy on OpenShift (AJ Ops-style)
 
 Run `cp deploy/oc-deploy.env.example .env.local`, create a private `sites.json` from `examples/sites.example.json`, set the provider credentials and project, `oc login`, then `./bin/3-oc-deploy.sh`. The new script builds in OpenShift and deploys `https://ajmcp.ncllcagents.com` via cert-manager's existing `letsencrypt-ncllc` ClusterIssuer. See [deploy/README.md](deploy/README.md) for DNS, TLS, versioning and secret setup.
+
+
+## Master AI switch
+
+Admin UI > top of every screen: **Per assistant | Claude | Codex | Antigravity**. One click routes every model call (site chat, assistants,
+lead capture, MCP, and agent jobs) through that tool's subscription login, whatever each assistant is set to. Assistants are not changed:
+choose **Per assistant** to restore each one's own provider and model at once. A model can be set per tool (blank = the tool's default).
+
+- Saved in `DATA_DIR/settings.json`; the deploy default is the `AI_MASTER_PROVIDER` environment variable (`claude`, `codex` or `antigravity`).
+- With the master on, no API key is used: Claude / Codex / Antigravity run on their saved logins (Logins & keys). Antigravity (`agy`) has no
+  login to paste: sign in once in the pod (HOME = the data folder) and it caches the session.
+- Antigravity is also selectable per assistant (`antigravity-cli`). It runs `agy -p <prompt> --output-format text --sandbox` headless; Google
+  documents no flag to turn its tools off, so the sandbox flag and the headless run's denied approvals are the guard.
+- Build the image with `--build-arg INSTALL_ANTIGRAVITY=true` to include `agy` (Google's installer script, unpinned, self-updating).

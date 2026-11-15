@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { tokenHash } from './auth.js';
 import { LIMITS } from './knowledge.js';
+import { MASTER_PROVIDERS, emptyMaster } from './master.js';
 
 export class StoreError extends Error {
   constructor(code, status = 400) { super(code); this.name = 'StoreError'; this.code = code; this.status = status; }
@@ -11,7 +12,7 @@ export class StoreError extends Error {
 const ID_RE = /^[a-z0-9][a-z0-9-_]{1,63}$/;
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 export const KEY_PROVIDERS = ['openai', 'anthropic'];
-export const PROVIDERS = [...KEY_PROVIDERS, 'claude-cli', 'codex-cli'];
+export const PROVIDERS = [...KEY_PROVIDERS, 'claude-cli', 'codex-cli', 'antigravity-cli'];
 
 // Saved test texts (question + what we expect), used by the admin "Tests" tab. Small on purpose: admin request bodies are capped.
 function cleanTests(raw) {
@@ -39,6 +40,19 @@ function cleanSite(input, existing = {}) {
   if (!transferTargets.every((t) => ID_RE.test(t))) throw new StoreError('invalid_transfer_targets');
   const tests = cleanTests(input.tests ?? existing.tests ?? []);
   return { provider, model, systemPrompt, tests, leadCapture: Boolean(input.leadCapture ?? existing.leadCapture), leadInstructions, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback, routeLabel, transferTargets };
+}
+
+// The master switch as stored: '' (off) or one of claude | codex | antigravity, with an optional model per provider.
+function cleanMaster(input) {
+  const provider = String(input?.provider ?? '').trim().toLowerCase();
+  if (provider && !MASTER_PROVIDERS.includes(provider)) throw new StoreError('invalid_master_provider');
+  const models = emptyMaster().models;
+  for (const p of MASTER_PROVIDERS) {
+    const m = String(input?.models?.[p] ?? '').trim();
+    if (m && !MODEL_RE.test(m)) throw new StoreError('invalid_model');
+    models[p] = m;
+  }
+  return { provider, models };
 }
 
 // Normalizes a runtime site (seed file token or stored hash) to the persisted shape. Never keeps a plain token.
@@ -76,7 +90,8 @@ export class SettingsStore {
     this.config = config;
     this.file = config.dataDir ? join(config.dataDir, 'settings.json') : '';
     this.env = { openai: config.openaiApiKey, anthropic: config.anthropicApiKey, claude: config.claudeOauthToken, passwordHash: config.adminPasswordHash };
-    this.state = { sites: undefined, keys: {}, passwordHash: '', passwordBase: '' };
+    this.envMaster = { provider: config.master ? config.master.provider : '', models: { ...emptyMaster().models, ...(config.master ? config.master.models : {}) } };
+    this.state = { sites: undefined, keys: {}, passwordHash: '', passwordBase: '', master: undefined };
   }
 
   get enabled() { return Boolean(this.file); }
@@ -90,7 +105,8 @@ export class SettingsStore {
       sites: Array.isArray(data.sites) ? data.sites.map(toStored) : undefined,
       keys: { openai: String(data.keys?.openai || ''), anthropic: String(data.keys?.anthropic || ''), claude: String(data.keys?.claude || '') },
       passwordHash: String(data.passwordHash || ''),
-      passwordBase: String(data.passwordBase || '')
+      passwordBase: String(data.passwordBase || ''),
+      master: data.master && typeof data.master === 'object' ? cleanMaster(data.master) : undefined
     };
     this.apply();
   }
@@ -101,6 +117,7 @@ export class SettingsStore {
     config.openaiApiKey = state.keys.openai || env.openai;
     config.anthropicApiKey = state.keys.anthropic || env.anthropic;
     config.claudeOauthToken = state.keys.claude || env.claude;
+    config.master = state.master || this.envMaster; // the saved switch wins; otherwise the deploy's AI_MASTER_PROVIDER
     // A password changed in the UI wins, unless the deploy script later issued a new one (--reset-admin).
     config.adminPasswordHash = state.passwordHash && state.passwordBase === env.passwordHash ? state.passwordHash : env.passwordHash;
   }
@@ -110,7 +127,7 @@ export class SettingsStore {
     try {
       mkdirSync(this.config.dataDir, { recursive: true });
       const tmp = `${this.file}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ sites: next.sites, keys: next.keys, passwordHash: next.passwordHash, passwordBase: next.passwordBase }, null, 2) + '\n', { mode: 0o600 });
+      writeFileSync(tmp, JSON.stringify({ sites: next.sites, keys: next.keys, passwordHash: next.passwordHash, passwordBase: next.passwordBase, master: next.master }, null, 2) + '\n', { mode: 0o600 });
       renameSync(tmp, this.file);
     } catch (error) {
       if (error instanceof StoreError) throw error;
@@ -286,6 +303,11 @@ export class SettingsStore {
     const key = value === null ? '' : String(value).trim();
     if (key && (key.length < 20 || key.length > 2000 || /\s/.test(key))) throw new StoreError('invalid_api_key');
     this.write({ ...this.state, sites: this.state.sites ?? this.sites(), keys: { ...this.state.keys, [provider]: key } });
+  }
+
+  /** The master AI switch: provider '' (off) | claude | codex | antigravity, plus an optional model for each. */
+  setMaster(input) {
+    this.write({ ...this.state, sites: this.state.sites ?? this.sites(), master: cleanMaster(input) });
   }
 
   setPasswordHash(hash) {

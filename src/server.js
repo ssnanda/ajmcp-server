@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { identityForBearer, authorizeSite } from './auth.js';
 import { Limiter } from './limits.js';
 import { InputError } from './provider.js';
+import { applyMaster } from './master.js';
 import { runChat } from './chat.js';
 import { routeChat, ConversationStore, KEY_RE } from './routing.js';
 import { LeadLimiter } from './leads.js';
@@ -135,7 +136,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
         status = 200;
         return json(res, status, {
           version: APP_VERSION, id: identity.id,
-          kind: identity.kind, provider: identity.kind === 'site' ? identity.site.provider : null,
+          kind: identity.kind, provider: identity.kind === 'site' ? applyMaster(identity.site, config).provider : null,
           endpoints: ['/v1/chat', '/v1/ajcore/reply', '/v1/assistant', '/mcp'],
           agentsEnabled: identity.kind === 'admin' && config.enableAgentJobs
         }, id);

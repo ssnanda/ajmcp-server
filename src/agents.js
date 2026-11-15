@@ -1,34 +1,42 @@
 import { spawn, execFile } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
+import { agentProviderFor } from './master.js';
+import { cliHome } from './cli.js';
 
 function toolEnv(config, provider) {
   // Explicit allowlist: never pass SITES_JSON, ADMIN_TOKEN, or other application secrets.
   const env = {
     PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
-    HOME: process.env.HOME || '/data/home',
+    HOME: config.master && config.master.provider ? cliHome(config) : (process.env.HOME || '/data/home'), // master on: the CLIs' own saved logins
     LANG: 'C.UTF-8', TERM: 'dumb', CI: 'true',
     DISABLE_AUTOUPDATER: '1'
   };
-  if (provider === 'codex' && config.openaiApiKey) env.OPENAI_API_KEY = config.openaiApiKey;
-  if (provider === 'claude' && config.anthropicApiKey) env.ANTHROPIC_API_KEY = config.anthropicApiKey;
+  const master = config.master && config.master.provider; // master on: the tool's subscription login, never an API key
+  if (!master && provider === 'codex' && config.openaiApiKey) env.OPENAI_API_KEY = config.openaiApiKey;
+  if (!master && provider === 'claude' && config.anthropicApiKey) env.ANTHROPIC_API_KEY = config.anthropicApiKey;
   return env;
 }
 
 export function runAgent(provider, prompt, config, spawnFn = spawn) {
   if (!config.enableAgentJobs) throw Object.assign(new Error('agent_jobs_disabled'), { status: 403 });
-  if (!['codex', 'claude'].includes(provider)) throw Object.assign(new Error('unknown_agent'), { status: 400 });
+  provider = agentProviderFor(provider, config); // the master switch (when on) picks the tool for every job
+  if (!['codex', 'claude', 'antigravity'].includes(provider)) throw Object.assign(new Error('unknown_agent'), { status: 400 });
   if (typeof prompt !== 'string' || prompt.length < 1 || prompt.length > 4000) {
     throw Object.assign(new Error('invalid_prompt'), { status: 400 });
   }
-  if (provider === 'codex' && !config.openaiApiKey || provider === 'claude' && !config.anthropicApiKey) {
-    throw Object.assign(new Error('agent_provider_not_configured'), { status: 503 });
+  const m = config.master && config.master.provider;
+  if (!m && (provider === 'codex' && !config.openaiApiKey || provider === 'claude' && !config.anthropicApiKey)) {
+    throw Object.assign(new Error('agent_provider_not_configured'), { status: 503 }); // with the master on, the tool's own subscription login is used (no API key)
   }
   try { accessSync(config.agentWorkspace, constants.R_OK); }
   catch { throw Object.assign(new Error('agent_workspace_unavailable'), { status: 503 }); }
-  const file = provider === 'codex' ? 'codex' : 'claude';
+  const file = provider === 'codex' ? 'codex' : provider === 'antigravity' ? 'agy' : 'claude';
+  const model = (config.master && config.master.provider === provider && config.master.models && config.master.models[provider]) || '';
   const args = provider === 'codex'
-    ? ['exec', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', prompt]
-    : ['-p', prompt, '--output-format', 'text', '--tools', '', '--no-session-persistence'];
+    ? ['exec', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', ...(model ? ['-m', model] : []), prompt]
+    : provider === 'antigravity'
+      ? ['--output-format', 'text', '--sandbox', ...(model ? ['--model', model] : []), '-p', prompt]
+      : ['-p', prompt, '--output-format', 'text', '--tools', '', '--no-session-persistence', ...(model ? ['--model', model] : [])];
 
   return new Promise((resolve, reject) => {
     const child = spawnFn(file, args, {
@@ -64,6 +72,6 @@ function fixedVersion(binary) {
 }
 
 export async function installedToolVersions() {
-  const [codex, claude] = await Promise.all([fixedVersion('codex'), fixedVersion('claude')]);
-  return { codex, claude };
+  const [codex, claude, antigravity] = await Promise.all([fixedVersion('codex'), fixedVersion('claude'), fixedVersion('agy')]);
+  return { codex, claude, antigravity };
 }
