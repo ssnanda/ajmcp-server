@@ -9,6 +9,7 @@ import { generateReply, listOllamaModels, ProviderError, InputError } from './pr
 import { APP_VERSION } from './version.js';
 import { knowledgeChars } from './knowledge.js';
 import { saveOllamaSecret } from './openshift.js';
+import { scanKnownHost } from './ssh.js';
 
 const asset = (name) => readFileSync(new URL(`./admin/${name}`, import.meta.url));
 const ASSETS = {
@@ -252,12 +253,19 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
       const user = String(body?.user || '').trim();
       const port = Number(body?.port || 22);
       const privateKey = String(body?.privateKey || '').trim() + '\n';
-      const knownHosts = String(body?.knownHosts || '').trim() + '\n';
+      let knownHosts = String(body?.knownHosts || '').trim();
+      const fingerprint = String(body?.fingerprint || '').trim();
       if (!/^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/.test(host) || host.startsWith('-')) throw new AdminError('invalid_ssh_host');
       if (!/^[A-Za-z_][A-Za-z0-9_-]{0,31}$/.test(user)) throw new AdminError('invalid_ssh_user');
       if (!Number.isInteger(port) || port < 1 || port > 65535) throw new AdminError('invalid_ssh_port');
       if (privateKey.length > 17000 || !/^-----BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY-----\n/.test(privateKey)) throw new AdminError('invalid_private_key');
-      if (knownHosts.length > 6000 || !knownHosts.trim() || /[\0\r]/.test(knownHosts)) throw new AdminError('invalid_known_hosts');
+      if (!knownHosts) {
+        if (!/^SHA256:[A-Za-z0-9+/]{43}$/.test(fingerprint)) throw new AdminError('invalid_host_fingerprint');
+        try { knownHosts = (await scanKnownHost(host, port, fingerprint)).trim(); }
+        catch (error) { throw new AdminError(error.message === 'host_fingerprint_mismatch' ? 'host_fingerprint_mismatch' : 'host_key_scan_failed', 409); }
+      }
+      knownHosts += '\n';
+      if (knownHosts.length > 6000 || /[\0\r]/.test(knownHosts)) throw new AdminError('invalid_known_hosts');
       try { await saveOllamaSecret({ host, user, port, privateKey, knownHosts }); }
       catch (error) { throw new AdminError(error.message === 'openshift_api_unavailable' ? 'openshift_api_unavailable' : 'ollama_secret_update_failed', 503); }
       return send(res, 202, { ok: true, restarting: true });

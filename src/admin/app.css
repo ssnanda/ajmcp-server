@@ -62,6 +62,9 @@ button:disabled { opacity: .5; cursor: default; }
 .actions.end { align-items: end; }
 .mt { margin-top: 10px; }
 .meta { color: var(--muted); font-size: 12px; }
+.inline-help { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--field); }
+.inline-help summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.command { display: block; margin-top: 6px; padding: 8px 10px; border-radius: 6px; background: var(--card); overflow-wrap: anywhere; user-select: all; }
 
 /* sites */
 .site { border: 1px solid var(--line); border-left: 4px solid var(--tone, var(--blue)); border-radius: 10px; margin-bottom: 10px; background: var(--card); }

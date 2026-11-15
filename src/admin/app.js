@@ -568,31 +568,44 @@ function ollamaPanel() {
   const port = h('input', { value: o.sshPort || 22, type: 'number', min: 1, max: 65535 });
   const keyFile = h('input', { type: 'file', accept: '.pem,.key,text/plain' });
   const hostsFile = h('input', { type: 'file', accept: 'text/plain' });
+  const keyText = h('textarea', { rows: 5, placeholder: 'Or paste the complete private key, including BEGIN/END lines' });
+  const hostsText = h('textarea', { rows: 4, placeholder: 'Or paste a known_hosts entry' });
+  const fingerprint = h('input', { placeholder: 'Or paste SHA256:… to create known_hosts automatically' });
   return collapsible('ollama', 'Remote Ollama',
     h('span', { class: 'sum' }, status(o.tunnelConnected, 'SSH connected', 'SSH disconnected')),
     h('div', { class: 'grid2' },
       h('div', { class: 'sub' }, h('h3', null, 'SSH tunnel'),
         h('div', { class: 'row' }, field('Host / IP', host), field('User', user), field('Port', port)),
-        h('div', { class: 'row' }, field('SSH private key', keyFile), field('Verified known_hosts', hostsFile)),
+        h('div', { class: 'row' }, field('Upload private key', keyFile), field('Upload known_hosts', hostsFile)),
+        h('div', { class: 'row' }, field('Paste private key', keyText), field('Paste known_hosts', hostsText)),
+        field('Verified ED25519 fingerprint (automatic known_hosts)', fingerprint),
+        h('details', { class: 'inline-help mt' },
+          h('summary', null, 'How to get the fingerprint'),
+          h('div', { class: 'meta mt' }, 'Run this on the Ubuntu server where Ollama is installed:'),
+          h('code', { class: 'command' }, 'sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub'),
+          h('div', { class: 'meta mt' }, 'Copy only the value beginning with SHA256: and paste it above. AJMCP fetches the public host key and accepts it only if the fingerprints match.')),
         h('div', { class: 'facts' },
           field('Private key Secret', status(o.keyConfigured, 'mounted', 'missing')),
           field('known_hosts Secret', status(o.knownHostsConfigured, 'mounted', 'missing'))),
         h('div', { class: 'actions mt' }, h('button', { class: 'primary', type: 'button', onclick: () => run(async () => {
-          if (!host.value.trim() || !user.value.trim() || !keyFile.files[0] || !hostsFile.files[0]) throw new Error('host, user, private key, and known_hosts are required');
+          const privateKey = keyFile.files[0] ? await keyFile.files[0].text() : keyText.value.trim();
+          const knownHosts = hostsFile.files[0] ? await hostsFile.files[0].text() : hostsText.value.trim();
+          if (!host.value.trim() || !user.value.trim() || !privateKey) throw new Error('host, user, and private key are required');
+          if (!knownHosts && !fingerprint.value.trim()) throw new Error('upload/paste known_hosts or enter the verified fingerprint');
           const result = await api('/ollama', 'PUT', {
             host: host.value.trim(), user: user.value.trim(), port: Number(port.value),
-            privateKey: await keyFile.files[0].text(), knownHosts: await hostsFile.files[0].text()
+            privateKey, knownHosts, fingerprint: fingerprint.value.trim()
           });
           notice = { kind: 'ok', text: result.restarting ? 'SSH Secret saved. AJMCP is restarting; refresh in about 30 seconds.' : 'SSH Secret saved.' };
-        }) }, 'Save & connect'))),
-      h('div', { class: 'sub' }, h('h3', null, 'Ollama'),
-        h('div', { class: 'meta' }, 'Tunnel settings come from OpenShift Secrets. Changes require a deployment rollout.'),
-        h('div', { class: 'actions mt' }, h('button', { type: 'button', disabled: !configured || null, onclick: () => run(async () => {
+        }) }, 'Save configuration'),
+        h('button', { type: 'button', disabled: !configured || null, onclick: () => run(async () => {
           const r = await api('/ollama/test', 'POST');
           models.ollama = r.models || [];
-          notice = r.ok ? { kind: 'ok', text: `Ollama connected · ${models.ollama.length} model(s)` } : { kind: 'err', text: `Ollama test failed — ${words(r.error)}` };
+          notice = r.ok ? { kind: 'ok', text: `Connected to Ollama · ${models.ollama.length} model(s)` } : { kind: 'err', text: `Connection failed — ${words(r.error)}` };
           await refresh();
-        }) }, 'Test connection')),
+        }) }, 'Connect'))),
+      h('div', { class: 'sub' }, h('h3', null, 'Ollama'),
+        h('div', { class: 'meta' }, 'Tunnel settings come from OpenShift Secrets. Changes require a deployment rollout.'),
         h('div', { class: 'meta mt' }, models.ollama && models.ollama.length ? models.ollama.join(', ') : 'No models loaded.'))));
 }
 
