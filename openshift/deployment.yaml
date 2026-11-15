@@ -97,10 +97,16 @@ spec:
               chmod 600 /run/ollama-tunnel/id_key
               while true; do
                 if test -f /run/ollama-tunnel/ready; then mv -f /run/ollama-tunnel/ready /run/ollama-tunnel/disconnected; fi
-                ssh -N -T -o BatchMode=yes -o ClearAllForwardings=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/run/secrets/ollama-ssh/known_hosts -o IdentitiesOnly=yes -i /run/ollama-tunnel/id_key -p "${OLLAMA_SSH_PORT:-22}" -l "$OLLAMA_SSH_USER" -L 127.0.0.1:11434:127.0.0.1:11434 -- "$OLLAMA_SSH_HOST" &
+                ssh -N -T -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/run/secrets/ollama-ssh/known_hosts -o IdentitiesOnly=yes -i /run/ollama-tunnel/id_key -p "${OLLAMA_SSH_PORT:-22}" -l "$OLLAMA_SSH_USER" -L 127.0.0.1:11434:127.0.0.1:11434 -- "$OLLAMA_SSH_HOST" &
                 child=$!
-                sleep 2
-                if kill -0 "$child" 2>/dev/null; then touch /run/ollama-tunnel/ready; fi
+                for attempt in 1 2 3 4 5 6 7 8 9 10; do
+                  if ! kill -0 "$child" 2>/dev/null; then break; fi
+                  if curl -fsS --max-time 2 http://127.0.0.1:11434/api/tags >/dev/null; then
+                    touch /run/ollama-tunnel/ready
+                    break
+                  fi
+                  sleep 1
+                done
                 wait "$child" || true
                 if test -f /run/ollama-tunnel/ready; then mv -f /run/ollama-tunnel/ready /run/ollama-tunnel/disconnected; fi
                 sleep 5
