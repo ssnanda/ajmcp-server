@@ -65,6 +65,10 @@ button:disabled { opacity: .5; cursor: default; }
 .inline-help { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--field); }
 .inline-help summary { cursor: pointer; color: var(--accent); font-weight: 600; }
 .command { display: block; margin-top: 6px; padding: 8px 10px; border-radius: 6px; background: var(--card); overflow-wrap: anywhere; user-select: all; }
+.ollama-sections { display: contents; }
+.ollama-connection { margin: 0 14px 14px; }
+.model-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.model-chip { padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
 
 /* sites */
 .site { border: 1px solid var(--line); border-left: 4px solid var(--tone, var(--blue)); border-radius: 10px; margin-bottom: 10px; background: var(--card); }

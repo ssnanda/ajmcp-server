@@ -571,10 +571,9 @@ function ollamaPanel() {
   const keyText = h('textarea', { rows: 5, placeholder: 'Or paste the complete private key, including BEGIN/END lines' });
   const hostsText = h('textarea', { rows: 4, placeholder: 'Or paste a known_hosts entry' });
   const fingerprint = h('input', { placeholder: 'Or paste SHA256:… to create known_hosts automatically' });
-  return collapsible('ollama', 'Remote Ollama',
+  const connection = collapsible('ollama', 'Ollama connection',
     h('span', { class: 'sum' }, status(o.tunnelConnected, 'SSH connected', 'SSH disconnected')),
-    h('div', { class: 'grid2' },
-      h('div', { class: 'sub' }, h('h3', null, 'SSH tunnel'),
+    h('div', { class: 'sub ollama-connection' }, h('h3', null, 'SSH tunnel'),
         h('div', { class: 'row' }, field('Host / IP', host), field('User', user), field('Port', port)),
         h('div', { class: 'row' }, field('Upload private key', keyFile), field('Upload known_hosts', hostsFile)),
         h('div', { class: 'row' }, field('Paste private key', keyText), field('Paste known_hosts', hostsText)),
@@ -603,10 +602,17 @@ function ollamaPanel() {
           models.ollama = r.models || [];
           notice = r.ok ? { kind: 'ok', text: `Connected to Ollama · ${models.ollama.length} model(s)` } : { kind: 'err', text: `Connection failed — ${words(r.error)}` };
           await refresh();
-        }) }, 'Connect'))),
-      h('div', { class: 'sub' }, h('h3', null, 'Ollama'),
-        h('div', { class: 'meta' }, 'Tunnel settings come from OpenShift Secrets. Changes require a deployment rollout.'),
-        h('div', { class: 'meta mt' }, models.ollama && models.ollama.length ? models.ollama.join(', ') : 'No models loaded.'))));
+        }) }, 'Connect')),
+      h('div', { class: 'meta mt' }, 'Connection settings are stored in OpenShift Secrets. Saving changes triggers a deployment rollout.')));
+  const available = models.ollama || [];
+  const modelPanel = collapsible('ollama-models', 'Ollama models',
+    h('span', { class: 'sum' }, status(available.length, available.length + ' available', 'not loaded')),
+    h('div', { class: 'sub' },
+      h('h3', null, 'Available models'),
+      available.length ? h('div', { class: 'model-list' }, available.map((id) => h('code', { class: 'model-chip' }, id))) : h('div', { class: 'empty' }, 'Connect to Ollama to discover models.'),
+      h('div', { class: 'meta mt' }, 'Choose a model for each assistant under Assistants, or choose Ollama and its model in the Master switch.'),
+      h('div', { class: 'actions mt' }, h('button', { type: 'button', onclick: () => { tab = 'sites'; history.replaceState(null, '', '#sites'); render(); } }, 'Choose per assistant'))));
+  return h('div', { class: 'ollama-sections' }, connection, modelPanel);
 }
 
 /* ---------- Activity: did the request reach the server, and what happened ---------- */
