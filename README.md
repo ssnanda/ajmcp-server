@@ -10,6 +10,7 @@ A single-container, OpenShift-ready, multi-tenant AI gateway and standards-based
 - Per-website authentication, private site-specific provider/model/system instructions, separate admin token.
 - Admin-only CLI operation (`/v1/agents/run`, opt-in) and installed CLI version inspection.
 - Health endpoints, guardrails, tests, container definition, OpenShift Deployment/Service/Route.
+- Admin Activity includes expandable, bounded in-memory chat transcripts showing visitor messages and AI responses; transcripts clear on restart or when an administrator selects Clear.
 - CLI versions pinned separately in `tool-versions.json` and a workflow to propose one-tool updates.
 
 ## Local quick start (Node 22+)

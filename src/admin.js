@@ -8,6 +8,7 @@ import { masterOf, applyMaster, MASTER_LABELS } from './master.js';
 import { generateReply, listOllamaModels, ProviderError, InputError } from './provider.js';
 import { APP_VERSION } from './version.js';
 import { knowledgeChars } from './knowledge.js';
+import { saveOllamaSecret } from './openshift.js';
 
 const asset = (name) => readFileSync(new URL(`./admin/${name}`, import.meta.url));
 const ASSETS = {
@@ -244,6 +245,22 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
         if (error instanceof ProviderError) return send(res, 200, { ok: false, ssh: existsSync(config.ollama.tunnelReadyFile), ollama: false, error: error.code });
         throw error;
       }
+    }
+    if (method === 'PUT' && path === '/admin/api/ollama') {
+      const body = await readBody(req, 24_000);
+      const host = String(body?.host || '').trim();
+      const user = String(body?.user || '').trim();
+      const port = Number(body?.port || 22);
+      const privateKey = String(body?.privateKey || '').trim() + '\n';
+      const knownHosts = String(body?.knownHosts || '').trim() + '\n';
+      if (!/^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$/.test(host) || host.startsWith('-')) throw new AdminError('invalid_ssh_host');
+      if (!/^[A-Za-z_][A-Za-z0-9_-]{0,31}$/.test(user)) throw new AdminError('invalid_ssh_user');
+      if (!Number.isInteger(port) || port < 1 || port > 65535) throw new AdminError('invalid_ssh_port');
+      if (privateKey.length > 17000 || !/^-----BEGIN (?:OPENSSH|RSA|EC|DSA) PRIVATE KEY-----\n/.test(privateKey)) throw new AdminError('invalid_private_key');
+      if (knownHosts.length > 6000 || !knownHosts.trim() || /[\0\r]/.test(knownHosts)) throw new AdminError('invalid_known_hosts');
+      try { await saveOllamaSecret({ host, user, port, privateKey, knownHosts }); }
+      catch (error) { throw new AdminError(error.message === 'openshift_api_unavailable' ? 'openshift_api_unavailable' : 'ollama_secret_update_failed', 503); }
+      return send(res, 202, { ok: true, restarting: true });
     }
 
     // Knowledge documents can be large; everything else stays within the normal request limit.

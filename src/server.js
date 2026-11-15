@@ -105,7 +105,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
     const start = Date.now();
     const path = new URL(req.url || '/', 'http://localhost').pathname;
     let status = 500;
-    const note = {};   // what to remember about this request (no message text, no secrets)
+    const note = {};   // bounded admin audit details; never credentials or arbitrary request bodies
     try {
       // Health probes reach the pod using its internal IP/Host, not the public OpenShift Route.
       // No secrets or tenant information are exposed by these probe endpoints.
@@ -170,6 +170,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
           try {
             const context = chatContext(body, ajcore ? ajcore.sessionId : 0);
             const messages = ajcore ? ajcore.messages : body.messages;
+            if (Array.isArray(messages)) note.transcript = messages.map(({ role, content }) => ({ role, content }));
             reply = context.conversationKey
               ? await routeChat({ entry: site, convs, key: context.conversationKey, messages, context, config, fetchFn, limiter: leadLimiter, log: (m) => console.info(`[routing] ${site.id} ${m}`) })
               : await runChat({ site, messages, context, config, fetchFn, limiter: leadLimiter });
@@ -177,7 +178,8 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
           catch (error) { stats.fail(site.id, error.code || error.message); throw error; }
           stats.ok(site.id);
           status = 200;
-          note.assistant = reply.assistant || site.id; note.routedFrom = reply.routed && reply.routed.from; note.provider = reply.provider;
+          note.assistant = reply.assistant || site.id; note.routedFrom = reply.routed && reply.routed.from; note.provider = reply.provider; note.model = reply.model;
+          if (Array.isArray(note.transcript)) note.transcript.push({ role: 'assistant', content: reply.text });
           return json(res, status, {
             requestId: id, site: site.id,
             ...(ajcore ? { sessionId: ajcore.sessionId, reply: reply.text, senderName: 'AJMCP AI' } : { reply: reply.text }),
@@ -225,7 +227,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
       note.error = note.error || message;
       return json(res, status, { error: message, requestId: id }, id);
     } finally {
-      // No message text or credentials in logs.
+      // Transcripts stay in the in-memory admin audit only; ordinary container logs contain metadata, never text or credentials.
       const entry = { t: new Date().toISOString(), requestId: id, method: req.method, route: path, status: res.statusCode || status, ms: Date.now() - start, ...note };
       console.info(JSON.stringify({ t: entry.t, requestId: id, method: req.method, route: path, status: entry.status, durationMs: entry.ms,
         site: note.site, channel: note.channel, sessionId: note.sessionId, error: note.error }));

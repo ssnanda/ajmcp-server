@@ -9,7 +9,7 @@ AJMCP v0.1.0 is a private, authenticated **server-side** AI integration. Do not 
 - Rate limiting, concurrency limits, bounded request/output size, timeouts.
 - No arbitrary shell, command paths, URLs or model selection exposed over API.
 - Codex agent runs in read-only sandbox; Claude runs with no tools; admin requests only.
-- No credentials or conversation text in ordinary access logs.
+- No credentials or conversation text in ordinary container access logs. A bounded recent chat transcript is retained in process memory for the authenticated admin Activity view and is cleared on restart or with Activity > Clear.
 - Remote Ollama is reachable only at fixed pod loopback through a strict-host-key SSH tunnel. Its private key and `known_hosts` are mounted from a separate OpenShift Secret and are never returned by admin APIs or stored in AJMCP settings.
 - Stateless MCP HTTP. OAuth not implemented; not yet suitable for clients that insist on OAuth.
 

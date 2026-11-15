@@ -11,6 +11,20 @@ test('keeps only known fields and trims long strings', () => {
   assert.equal(e.error.length, 120);
 });
 
+test('keeps only bounded chat transcript roles and never arbitrary secrets', () => {
+  const log = new ActivityLog();
+  log.add({ route: '/v1/chat', token: 'secret', transcript: [
+    { role: 'system', content: 'hidden instructions' },
+    { role: 'user', content: 'What are your hours?' },
+    { role: 'assistant', content: 'Nine to five.' },
+    { role: 'user', content: 'x'.repeat(5000) }
+  ] });
+  const [entry] = log.list();
+  assert.equal(entry.token, undefined);
+  assert.deepEqual(entry.transcript.map((m) => m.role), ['user', 'assistant', 'user']);
+  assert.equal(entry.transcript[2].content.length, 4000);
+});
+
 test('newest first, capped, and problems filter', () => {
   const log = new ActivityLog(3);
   for (let i = 1; i <= 5; i += 1) log.add({ route: '/r' + i, status: i === 4 ? 401 : 200 });

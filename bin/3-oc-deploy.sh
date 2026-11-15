@@ -201,6 +201,11 @@ for key in admin-token sites.json; do
 done
 ensure_admin_login
 
+# The admin may update this one pre-created Secret through narrowly scoped RBAC. It cannot create or read other Secrets.
+if ! oc get secret ajmcp-ollama-ssh -n "$PROJECT" >/dev/null 2>&1; then
+  oc create secret generic ajmcp-ollama-ssh -n "$PROJECT"
+fi
+
 if [[ "$SYNC_OLLAMA_SSH" == true ]]; then
   OLLAMA_SSH_HOST="${OLLAMA_SSH_HOST:-}"
   OLLAMA_SSH_USER="${OLLAMA_SSH_USER:-}"
@@ -236,8 +241,8 @@ render() {
       -e "s|AJMCP_DEPLOYED_AT_PLACEHOLDER|${DEPLOYED_AT:-placeholder}|g" "$1"
 }
 
-echo "Applying ImageStream, BuildConfig, ConfigMap, Service and data volume..."
-for file in openshift/imagestream.yaml openshift/buildconfig.yaml openshift/configmap.yaml openshift/service.yaml openshift/pvc.yaml; do
+echo "Applying ImageStream, BuildConfig, ConfigMap, Service, RBAC and data volume..."
+for file in openshift/imagestream.yaml openshift/buildconfig.yaml openshift/configmap.yaml openshift/service.yaml openshift/pvc.yaml openshift/rbac.yaml; do
   render "$file" | oc apply -n "$PROJECT" -f -
 done
 oc patch buildconfig "$APP" -n "$PROJECT" --type=merge \

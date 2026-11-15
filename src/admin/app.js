@@ -563,16 +563,28 @@ function ollamaPanel() {
   const o = state.ollama || {};
   const configured = o.sshHost && o.sshUser && o.keyConfigured && o.knownHostsConfigured;
   const status = (ok, yes, no) => h('span', { class: 'pill ' + (ok ? 'on' : 'off') }, ok ? yes : no);
+  const host = h('input', { value: o.sshHost || '', placeholder: 'Ubuntu hostname or IP' });
+  const user = h('input', { value: o.sshUser || '', placeholder: 'SSH username' });
+  const port = h('input', { value: o.sshPort || 22, type: 'number', min: 1, max: 65535 });
+  const keyFile = h('input', { type: 'file', accept: '.pem,.key,text/plain' });
+  const hostsFile = h('input', { type: 'file', accept: 'text/plain' });
   return collapsible('ollama', 'Remote Ollama',
     h('span', { class: 'sum' }, status(o.tunnelConnected, 'SSH connected', 'SSH disconnected')),
     h('div', { class: 'grid2' },
       h('div', { class: 'sub' }, h('h3', null, 'SSH tunnel'),
+        h('div', { class: 'row' }, field('Host / IP', host), field('User', user), field('Port', port)),
+        h('div', { class: 'row' }, field('SSH private key', keyFile), field('Verified known_hosts', hostsFile)),
         h('div', { class: 'facts' },
-          field('Host', h('code', null, o.sshHost || 'not configured')),
-          field('User', h('code', null, o.sshUser || 'not configured')),
-          field('Port', h('code', null, o.sshPort || 22)),
           field('Private key Secret', status(o.keyConfigured, 'mounted', 'missing')),
-          field('known_hosts Secret', status(o.knownHostsConfigured, 'mounted', 'missing')))),
+          field('known_hosts Secret', status(o.knownHostsConfigured, 'mounted', 'missing'))),
+        h('div', { class: 'actions mt' }, h('button', { class: 'primary', type: 'button', onclick: () => run(async () => {
+          if (!host.value.trim() || !user.value.trim() || !keyFile.files[0] || !hostsFile.files[0]) throw new Error('host, user, private key, and known_hosts are required');
+          const result = await api('/ollama', 'PUT', {
+            host: host.value.trim(), user: user.value.trim(), port: Number(port.value),
+            privateKey: await keyFile.files[0].text(), knownHosts: await hostsFile.files[0].text()
+          });
+          notice = { kind: 'ok', text: result.restarting ? 'SSH Secret saved. AJMCP is restarting; refresh in about 30 seconds.' : 'SSH Secret saved.' };
+        }) }, 'Save & connect'))),
       h('div', { class: 'sub' }, h('h3', null, 'Ollama'),
         h('div', { class: 'meta' }, 'Tunnel settings come from OpenShift Secrets. Changes require a deployment rollout.'),
         h('div', { class: 'actions mt' }, h('button', { type: 'button', disabled: !configured || null, onclick: () => run(async () => {
@@ -607,21 +619,40 @@ function ensureActivityTimer() {
 const ROUTE_NAMES = { '/v1/ajcore/reply': 'chat / text reply', '/v1/chat': 'chat', '/v1/assistant': 'assistant', '/mcp': 'mcp', '/v1/agents/run': 'agent' };
 const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const took = (ms) => (ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
+const openActivity = new Set();
+
+function transcriptView(entry) {
+  const messages = entry.transcript || [];
+  return h('div', { class: 'audit' },
+    h('div', { class: 'audit-meta' },
+      h('span', null, 'Request ', h('code', null, entry.requestId || '—')),
+      h('span', null, 'Provider ', h('code', null, entry.provider || '—')),
+      h('span', null, 'Model ', h('code', null, entry.model || '—')),
+      entry.routedFrom ? h('span', null, 'Routed from ', h('code', null, entry.routedFrom)) : null),
+    messages.length ? h('div', { class: 'conversation' }, messages.map((message) =>
+      h('div', { class: 'bubble ' + message.role },
+        h('div', { class: 'bubble-role' }, message.role === 'user' ? 'Visitor' : message.role === 'assistant' ? 'Assistant' : `Tool${message.name ? ` · ${message.name}` : ''}`),
+        h('div', { class: 'bubble-text' }, message.content))))
+      : h('div', { class: 'empty' }, entry.error ? `No transcript captured · ${words(entry.error)}` : 'No transcript captured for this request.'));
+}
 
 function activityTab() {
   if (!activity.loaded) loadActivity();
   ensureActivityTimer();
-  const rows = activity.entries.map((e) => {
+  const rows = activity.entries.flatMap((e) => {
     const bad = e.status >= 400 || e.error;
     const who = e.assistant && e.assistant !== e.site ? `${e.site} → ${e.assistant}` : (e.site || '—');
-    return h('tr', { class: bad ? 'bad' : '' },
+    const expanded = openActivity.has(e.requestId);
+    const row = h('tr', { class: bad ? 'bad' : '' },
       h('td', null, clock(e.t)),
       h('td', null, who, e.via && e.via !== 'primary' ? h('span', { class: 'meta' }, ' · ' + e.via) : null),
       h('td', null, ROUTE_NAMES[e.route] || e.route, e.channel ? h('span', { class: 'meta' }, ' · ' + e.channel) : null),
       h('td', null, e.sessionId != null ? '#' + e.sessionId : '—', e.chars != null ? h('span', { class: 'meta' }, ` · ${e.chars} chars`) : null),
       h('td', null, h('span', { class: 'pill ' + (bad ? 'bad' : 'on') }, String(e.status))),
       h('td', null, took(e.ms)),
-      h('td', null, e.error ? words(e.error) + (e.host ? ` (${e.host})` : '') : (e.provider || 'ok')));
+      h('td', null, e.error ? words(e.error) + (e.host ? ` (${e.host})` : '') : (e.provider || 'ok'),
+        e.transcript ? h('button', { type: 'button', class: 'audit-toggle', onclick: () => { expanded ? openActivity.delete(e.requestId) : openActivity.add(e.requestId); render(); } }, expanded ? 'Hide' : 'View conversation') : null));
+    return expanded ? [row, h('tr', { class: 'audit-row' }, h('td', { colspan: 7 }, transcriptView(e)))] : [row];
   });
   const last = activity.entries[0];
   return [h('section', { class: 'card' },

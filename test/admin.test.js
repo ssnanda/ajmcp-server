@@ -75,6 +75,10 @@ test('admin requires login, then manages sites; tokens are hashed and work immed
 
   const chat = await fetch(url + '/v1/chat', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'hello' }] }) });
   assert.equal(chat.status, 200);
+  const audit = (await call('/admin/api/activity')).data.entries[0];
+  assert.deepEqual(audit.transcript, [{ role: 'user', content: 'hello' }, { role: 'assistant', content: 'OK' }]);
+  assert.equal(audit.provider, 'openai');
+  assert.equal(JSON.stringify(audit).includes(token), false);
 
   await call('/admin/api/sites/blog', 'PUT', { disabled: true });
   const blocked = await fetch(url + '/v1/chat', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ messages: [{ role: 'user', content: 'hello' }] }) });

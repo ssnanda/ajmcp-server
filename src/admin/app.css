@@ -204,3 +204,14 @@ label.check input { width: auto; min-height: 0; }
 .tbl th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .tbl td { padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
 .tbl tr.bad td { background: color-mix(in srgb, var(--red) 6%, transparent); }
+.audit-toggle { margin-left: 8px; min-height: 28px; padding: 3px 8px; color: var(--accent); }
+.audit-row > td { padding: 0 8px 12px; background: var(--field); }
+.audit { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.audit-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+.conversation { display: flex; flex-direction: column; gap: 8px; }
+.bubble { max-width: min(780px, 88%); padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--field); }
+.bubble.user { align-self: flex-start; border-left: 3px solid var(--blue); }
+.bubble.assistant { align-self: flex-end; border-right: 3px solid var(--green); }
+.bubble.tool { align-self: flex-start; border-left: 3px solid var(--orange); }
+.bubble-role { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 3px; }
+.bubble-text { white-space: pre-wrap; overflow-wrap: anywhere; }
