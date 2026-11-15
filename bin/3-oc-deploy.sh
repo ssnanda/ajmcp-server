@@ -10,12 +10,13 @@ cd "$ROOT"
 usage() {
   cat <<'USAGE'
 AJMCP OpenShift deployment:
-  ./bin/3-oc-deploy.sh [version] [--skip-bump] [--sync-secrets]
+  ./bin/3-oc-deploy.sh [version] [--skip-bump] [--sync-secrets] [--sync-ollama-ssh]
 
 Defaults: package.json version, interactive bump when Git dirty, keep existing
 OpenShift secrets, build in cluster, deploy an immutable image digest.
   --skip-bump     Skip version/commit/push prompt for uncommitted files
   --sync-secrets  Explicitly overwrite ajmcp-secrets using local private files
+  --sync-ollama-ssh  Create/update the separate Ollama SSH Secret from private local files
   --reset-admin   Generate a new admin user + password for the web admin and show them once
 First run: just run it. It creates the web admin login and prints it once (save it).
 Sites, AI keys and the admin password are then managed at https://<host>/admin.
@@ -26,11 +27,13 @@ VERSION_OVERRIDE=""
 SKIP_BUMP=false
 SYNC_SECRETS=false
 RESET_ADMIN=false
+SYNC_OLLAMA_SSH=false
 for arg in "$@"; do
   case "$arg" in
     --skip-bump) SKIP_BUMP=true ;;
     --sync-secrets) SYNC_SECRETS=true ;;
     --reset-admin) RESET_ADMIN=true ;;
+    --sync-ollama-ssh) SYNC_OLLAMA_SSH=true ;;
     --help|-h) usage; exit 0 ;;
     -*) echo "ERROR: Unknown option $arg" >&2; usage; exit 2 ;;
     *)
@@ -197,6 +200,33 @@ for key in admin-token sites.json; do
   fi
 done
 ensure_admin_login
+
+if [[ "$SYNC_OLLAMA_SSH" == true ]]; then
+  OLLAMA_SSH_HOST="${OLLAMA_SSH_HOST:-}"
+  OLLAMA_SSH_USER="${OLLAMA_SSH_USER:-}"
+  OLLAMA_SSH_PORT="${OLLAMA_SSH_PORT:-22}"
+  OLLAMA_SSH_PRIVATE_KEY_FILE="${OLLAMA_SSH_PRIVATE_KEY_FILE:-}"
+  OLLAMA_SSH_KNOWN_HOSTS_FILE="${OLLAMA_SSH_KNOWN_HOSTS_FILE:-}"
+  [[ "$OLLAMA_SSH_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$ ]] || { echo "ERROR: Invalid OLLAMA_SSH_HOST" >&2; exit 1; }
+  [[ "$OLLAMA_SSH_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]{0,31}$ ]] || { echo "ERROR: Invalid OLLAMA_SSH_USER" >&2; exit 1; }
+  [[ "$OLLAMA_SSH_PORT" =~ ^[0-9]{1,5}$ ]] && (( OLLAMA_SSH_PORT >= 1 && OLLAMA_SSH_PORT <= 65535 )) || { echo "ERROR: Invalid OLLAMA_SSH_PORT" >&2; exit 1; }
+  [[ -f "$OLLAMA_SSH_PRIVATE_KEY_FILE" && -f "$OLLAMA_SSH_KNOWN_HOSTS_FILE" ]] || { echo "ERROR: Set OLLAMA_SSH_PRIVATE_KEY_FILE and OLLAMA_SSH_KNOWN_HOSTS_FILE to readable files" >&2; exit 1; }
+  cp "$OLLAMA_SSH_PRIVATE_KEY_FILE" "$TMP/id_key"
+  cp "$OLLAMA_SSH_KNOWN_HOSTS_FILE" "$TMP/known_hosts"
+  printf %s "$OLLAMA_SSH_HOST" > "$TMP/ollama-host"
+  printf %s "$OLLAMA_SSH_USER" > "$TMP/ollama-user"
+  printf %s "$OLLAMA_SSH_PORT" > "$TMP/ollama-port"
+  chmod 600 "$TMP/id_key" "$TMP/known_hosts" "$TMP/ollama-host" "$TMP/ollama-user" "$TMP/ollama-port"
+  oc create secret generic ajmcp-ollama-ssh -n "$PROJECT" \
+    --from-file=id_key="$TMP/id_key" --from-file=known_hosts="$TMP/known_hosts" \
+    --from-file=host="$TMP/ollama-host" --from-file=user="$TMP/ollama-user" --from-file=port="$TMP/ollama-port" \
+    --dry-run=client -o yaml | oc apply -n "$PROJECT" -f -
+  echo "Updated ajmcp-ollama-ssh; this deployment rollout will restart the tunnel sidecar."
+elif oc get secret ajmcp-ollama-ssh -n "$PROJECT" >/dev/null 2>&1; then
+  echo "Keeping current ajmcp-ollama-ssh. Use --sync-ollama-ssh to update it deliberately."
+else
+  echo "Ollama SSH is not configured; other providers remain available."
+fi
 
 render() {
   sed -e "s|AJMCP_HOST_PLACEHOLDER|$HOSTNAME|g" \

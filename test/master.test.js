@@ -22,6 +22,14 @@ test('master on replaces provider and model for every site', () => {
   assert.equal(site.provider, 'anthropic'); // the site itself is not changed
 });
 
+test('ollama master uses its configured model and switching off restores the untouched site', () => {
+  const config = { master: { provider: 'ollama', models: { ollama: 'qwen3:8b' } } };
+  assert.deepEqual(applyMaster(site, config), { ...site, provider: 'ollama', model: 'qwen3:8b', masterApplied: true });
+  config.master.provider = '';
+  assert.equal(applyMaster(site, config), site);
+  assert.deepEqual(site, { id: 'a', provider: 'anthropic', model: 'claude-sonnet-5-5' });
+});
+
 test('an unknown master provider is ignored', () => {
   assert.equal(masterOf({ master: { provider: 'nope', models: {} } }).provider, '');
 });

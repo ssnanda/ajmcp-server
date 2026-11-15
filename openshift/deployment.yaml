@@ -45,11 +45,22 @@ spec:
             - name: ADMIN_PASSWORD_HASH
               valueFrom:
                 secretKeyRef: { name: ajmcp-secrets, key: admin-password-hash }
+            - name: OLLAMA_SSH_HOST
+              valueFrom:
+                secretKeyRef: { name: ajmcp-ollama-ssh, key: host, optional: true }
+            - name: OLLAMA_SSH_USER
+              valueFrom:
+                secretKeyRef: { name: ajmcp-ollama-ssh, key: user, optional: true }
+            - name: OLLAMA_SSH_PORT
+              valueFrom:
+                secretKeyRef: { name: ajmcp-ollama-ssh, key: port, optional: true }
           volumeMounts:
             - { name: site-config, mountPath: /run/secrets/ajmcp, readOnly: true }
             - { name: data, mountPath: /data }
             - { name: tmp, mountPath: /tmp }
             - { name: workspace, mountPath: /workspace, readOnly: true }
+            - { name: ollama-ssh, mountPath: /run/secrets/ollama-ssh, readOnly: true }
+            - { name: ollama-tunnel, mountPath: /run/ollama-tunnel, readOnly: true }
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -66,6 +77,59 @@ spec:
             httpGet: { path: /health/ready, port: http }
             initialDelaySeconds: 3
             periodSeconds: 10
+        - name: ollama-ssh-tunnel
+          image: AJMCP_IMAGE_PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              case "${OLLAMA_SSH_HOST:-}" in ''|-*) echo "Ollama SSH tunnel is not configured"; exec sleep infinity;; esac
+              echo "$OLLAMA_SSH_HOST" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$' || { echo "Invalid SSH host"; exit 2; }
+              echo "${OLLAMA_SSH_USER:-}" | grep -Eq '^[A-Za-z_][A-Za-z0-9_-]{0,31}$' || { echo "Invalid SSH user"; exit 2; }
+              echo "${OLLAMA_SSH_PORT:-22}" | grep -Eq '^[0-9]{1,5}$' || { echo "Invalid SSH port"; exit 2; }
+              test -s /run/secrets/ollama-ssh/id_key && test -s /run/secrets/ollama-ssh/known_hosts || { echo "SSH key or known_hosts missing"; exec sleep infinity; }
+              cp /run/secrets/ollama-ssh/id_key /run/ollama-tunnel/id_key
+              chmod 600 /run/ollama-tunnel/id_key
+              while true; do
+                if test -f /run/ollama-tunnel/ready; then mv -f /run/ollama-tunnel/ready /run/ollama-tunnel/disconnected; fi
+                ssh -N -T -o BatchMode=yes -o ClearAllForwardings=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/run/secrets/ollama-ssh/known_hosts -o IdentitiesOnly=yes -i /run/ollama-tunnel/id_key -p "${OLLAMA_SSH_PORT:-22}" -l "$OLLAMA_SSH_USER" -L 127.0.0.1:11434:127.0.0.1:11434 -- "$OLLAMA_SSH_HOST" &
+                child=$!
+                sleep 2
+                if kill -0 "$child" 2>/dev/null; then touch /run/ollama-tunnel/ready; fi
+                wait "$child" || true
+                if test -f /run/ollama-tunnel/ready; then mv -f /run/ollama-tunnel/ready /run/ollama-tunnel/disconnected; fi
+                sleep 5
+              done
+          env:
+            - name: HOME
+              value: /tmp
+            - name: OLLAMA_SSH_HOST
+              valueFrom:
+                secretKeyRef: { name: ajmcp-ollama-ssh, key: host, optional: true }
+            - name: OLLAMA_SSH_USER
+              valueFrom:
+                secretKeyRef: { name: ajmcp-ollama-ssh, key: user, optional: true }
+            - name: OLLAMA_SSH_PORT
+              valueFrom:
+                secretKeyRef: { name: ajmcp-ollama-ssh, key: port, optional: true }
+          volumeMounts:
+            - { name: ollama-ssh, mountPath: /run/secrets/ollama-ssh, readOnly: true }
+            - { name: ollama-tunnel, mountPath: /run/ollama-tunnel }
+            - { name: tunnel-tmp, mountPath: /tmp }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+            seccompProfile: { type: RuntimeDefault }
+          resources:
+            requests: { cpu: 10m, memory: 24Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          livenessProbe:
+            exec: { command: ["/bin/sh", "-c", "test ! -s /run/secrets/ollama-ssh/id_key || test -f /run/ollama-tunnel/ready"] }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 6
       volumes:
         - name: site-config
           secret:
@@ -77,3 +141,13 @@ spec:
           emptyDir: { sizeLimit: 512Mi }
         - name: workspace
           emptyDir: { sizeLimit: 256Mi }
+        - name: ollama-ssh
+          secret:
+            secretName: ajmcp-ollama-ssh
+            optional: true
+            # OpenShift assigns an arbitrary UID in group 0; the sidecar copies the key to mode 0600 before ssh uses it.
+            defaultMode: 0440
+        - name: ollama-tunnel
+          emptyDir: { sizeLimit: 1Mi }
+        - name: tunnel-tmp
+          emptyDir: { sizeLimit: 8Mi }

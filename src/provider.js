@@ -46,6 +46,12 @@ async function fetchModel(fetchFn, url, options, timeoutMs) {
   try { return await response.json(); } catch { throw new ProviderError('provider_invalid_response'); }
 }
 
+export async function listOllamaModels(config, fetchFn = fetch) {
+  const data = await fetchModel(fetchFn, `${config.ollamaUrl}/api/tags`, { method: 'GET' }, config.providerTimeoutMs);
+  if (!Array.isArray(data?.models)) throw new ProviderError('provider_invalid_response');
+  return data.models.map((item) => String(item?.name || item?.model || '')).filter(Boolean).sort();
+}
+
 export async function generateReply(site, messages, config, fetchFn = fetch) {
   const validated = validateMessages(messages, config);
   site = applyMaster(site, config); // the master switch (when on) decides the provider and model for every call
@@ -60,7 +66,7 @@ export async function generateReply(site, messages, config, fetchFn = fetch) {
       throw error;
     }
   }
-  const model = site.model || (provider === 'openai' ? config.openaiModel : config.anthropicModel);
+  const model = site.model || (provider === 'openai' ? config.openaiModel : provider === 'ollama' ? config.ollamaModel : config.anthropicModel);
   if (!model || /^SET_SUPPORTED/.test(model)) throw new ProviderError('model_not_configured', 503);
 
   if (provider === 'openai') {
@@ -89,6 +95,16 @@ export async function generateReply(site, messages, config, fetchFn = fetch) {
     const text = (data?.content || []).filter(x => x.type === 'text').map(x => x.text).join('\n').trim();
     if (!text) throw new ProviderError('provider_empty_reply');
     return { text, provider, model, usage: data.usage || null };
+  }
+  if (provider === 'ollama') {
+    const history = site.systemPrompt ? [{ role: 'system', content: site.systemPrompt }, ...validated] : validated;
+    const data = await fetchModel(fetchFn, `${config.ollamaUrl}/api/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages: history, stream: false })
+    }, config.providerTimeoutMs);
+    const text = typeof data?.message?.content === 'string' ? data.message.content.trim() : '';
+    if (!text) throw new ProviderError('provider_empty_reply');
+    return { text, provider, model, usage: data.prompt_eval_count || data.eval_count ? { input_tokens: data.prompt_eval_count || 0, output_tokens: data.eval_count || 0 } : null };
   }
   throw new InputError('Unsupported provider');
 }

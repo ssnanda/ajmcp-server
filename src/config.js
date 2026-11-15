@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const boundedInt = (value, fallback, min, max) => {
@@ -22,7 +22,7 @@ function parseSites(raw, allowEmpty = false) {
       throw new Error(`Site ${id} needs a unique random secret (32+ characters)`);
     }
     if (ids.has(id) || tokens.has(token)) throw new Error('Duplicate site id or token');
-    if (site.provider && !['openai', 'anthropic', 'claude-cli', 'codex-cli', 'antigravity-cli'].includes(site.provider)) throw new Error('Unknown site provider');
+    if (site.provider && !['openai', 'anthropic', 'ollama', 'claude-cli', 'codex-cli', 'antigravity-cli'].includes(site.provider)) throw new Error('Unknown site provider');
     ids.add(id); tokens.add(token);
     return Object.freeze({
       id, token, provider: site.provider || 'openai',
@@ -47,6 +47,14 @@ export function loadConfig(env = process.env, read = readFileSync) {
   const adminToken = String(env.ADMIN_TOKEN || '');
   if (adminToken && adminToken.length < 32) throw new Error('ADMIN_TOKEN must be at least 32 characters');
   if (adminToken && sites.some((site) => site.token === adminToken)) throw new Error('Admin token must differ from site tokens');
+  const sshHost = String(env.OLLAMA_SSH_HOST || '').trim();
+  const sshUser = String(env.OLLAMA_SSH_USER || '').trim();
+  const sshPort = boundedInt(env.OLLAMA_SSH_PORT, 22, 1, 65535);
+  if (sshHost && (!/^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|\[[0-9A-Fa-f:]+\])$/.test(sshHost) || sshHost.startsWith('-'))) throw new Error('Invalid OLLAMA_SSH_HOST');
+  if (sshUser && !/^[A-Za-z_][A-Za-z0-9_-]{0,31}$/.test(sshUser)) throw new Error('Invalid OLLAMA_SSH_USER');
+  if (Boolean(sshHost) !== Boolean(sshUser)) throw new Error('OLLAMA_SSH_HOST and OLLAMA_SSH_USER must be set together');
+  const ollamaKeyFile = env.OLLAMA_SSH_KEY_FILE || '/run/secrets/ollama-ssh/id_key';
+  const ollamaKnownHostsFile = env.OLLAMA_KNOWN_HOSTS_FILE || '/run/secrets/ollama-ssh/known_hosts';
   return {
     host: env.HOST || '0.0.0.0',
     port: boundedInt(env.PORT, 3000, 1, 65535),
@@ -58,8 +66,17 @@ export function loadConfig(env = process.env, read = readFileSync) {
     claudeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN || '',
     openaiModel: env.OPENAI_MODEL || '',
     anthropicModel: env.ANTHROPIC_MODEL || '',
+    ollamaModel: env.OLLAMA_MODEL || '',
+    // The endpoint is intentionally fixed: callers and admins cannot turn AJMCP into an HTTP/SSRF proxy.
+    ollamaUrl: 'http://127.0.0.1:11434',
+    ollama: {
+      sshHost, sshUser, sshPort,
+      keyConfigured: existsSync(ollamaKeyFile),
+      knownHostsConfigured: existsSync(ollamaKnownHostsFile),
+      tunnelReadyFile: env.OLLAMA_TUNNEL_READY_FILE || '/run/ollama-tunnel/ready'
+    },
     // Master switch (claude | codex | antigravity | empty = every site uses its own provider). The admin UI setting wins once saved.
-    master: { provider: ['claude', 'codex', 'antigravity'].includes(String(env.AI_MASTER_PROVIDER || '').toLowerCase()) ? String(env.AI_MASTER_PROVIDER).toLowerCase() : '', models: { claude: '', codex: '', antigravity: '' } },
+    master: { provider: ['claude', 'codex', 'antigravity', 'ollama'].includes(String(env.AI_MASTER_PROVIDER || '').toLowerCase()) ? String(env.AI_MASTER_PROVIDER).toLowerCase() : '', models: { claude: '', codex: '', antigravity: '', ollama: '' } },
     allowedHosts: new Set((env.ALLOWED_HOSTS || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean)),
     allowedOrigins: new Set((env.ALLOWED_ORIGINS || '').split(',').map(x => x.trim()).filter(Boolean)),
     maxRequestBytes: boundedInt(env.MAX_REQUEST_BYTES, 32768, 1024, 1_048_576),

@@ -87,6 +87,7 @@ details.add > div { padding: 0 12px 12px; }
 .pill.tone-claude-cli { color: var(--violet); border-color: var(--violet); }
 .pill.tone-codex-cli { color: var(--teal); border-color: var(--teal); }
 .pill.tone-antigravity-cli { color: var(--blue, #4285f4); border-color: var(--blue, #4285f4); }
+.pill.tone-ollama { color: var(--teal); border-color: var(--teal); }
 .master { margin-bottom: 14px; display: grid; gap: 8px; }
 .master.is-on { border-color: var(--violet); box-shadow: 0 0 0 2px color-mix(in srgb, var(--violet) 18%, transparent); }
 .mhead { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; }
@@ -146,6 +147,7 @@ label.check input { width: auto; min-height: 0; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
 .dot.tone-anthropic { background: var(--orange); } .dot.tone-openai { background: var(--green); }
 .dot.tone-claude-cli { background: var(--violet); } .dot.tone-codex-cli { background: var(--teal); }
+.dot.tone-ollama { background: var(--teal); }
 .dot.off { opacity: .35; }
 .tkids { margin: 0 0 4px 17px; padding-left: 10px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 1px; }
 .tchild { font-size: 13px; min-height: 34px; }

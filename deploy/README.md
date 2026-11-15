@@ -18,6 +18,7 @@ This is the recommended, clone-and-run workflow. It builds the AJMCP + Codex + C
 - `./bin/3-oc-deploy.sh --skip-bump`: deploy working tree without Git interaction.
 - `./bin/3-oc-deploy.sh 0.1.2`: tag the image explicitly (server version still comes from package.json; prefer a real bump).
 - `./bin/3-oc-deploy.sh --sync-secrets`: **explicitly overwrite** the protected Secret from local .env.local and sites.json; normally the existing Secret is preserved.
+- `./bin/3-oc-deploy.sh --sync-ollama-ssh`: create/update only the separate Ollama SSH Secret and roll out the tunnel sidecar; ordinary deploys preserve it.
 
 The version in package.json governs the server; tool-versions.json independently pins the Codex and Claude CLI versions. Both pinned versions are set as OpenShift build arguments. A new binary build produces one combined container image; an immutable image digest ensures reliable Deployment rollback on a failed rollout.
 
@@ -36,3 +37,25 @@ The script uploads only Containerfile, package.json, tool-versions.json and src/
 ## Subscription logins (Claude / ChatGPT)
 
 The image contains the Claude Code and Codex CLIs. In `/admin` > Subscription logins, paste the token from `claude setup-token` and the `~/.codex/auth.json` from `codex login` (both made on your Mac). They are stored on the data volume and survive redeploys. A site then uses them by choosing provider "Claude subscription (CLI)" or "ChatGPT subscription (Codex CLI)"; the WordPress connector needs no other change. Claude runs with no tools. Codex runs as a read-only agent, so prefer Claude for public-facing chat.
+
+## Remote Ollama over SSH
+
+On Ubuntu, keep Ollama on its default loopback listener. Create a dedicated SSH account/key and restrict the public key in `~/.ssh/authorized_keys`:
+
+```text
+restrict,port-forwarding,permitopen="127.0.0.1:11434" ssh-ed25519 AAAA... ajmcp-ollama
+```
+
+Confirm the server host key out of band and create a private `known_hosts` file (do not use `StrictHostKeyChecking=no`). Set these only in `.env.local` or the process environment:
+
+```dotenv
+OLLAMA_SSH_HOST=ollama.example.net
+OLLAMA_SSH_USER=ajmcp_tunnel
+OLLAMA_SSH_PORT=22
+OLLAMA_SSH_PRIVATE_KEY_FILE=/absolute/private/path/id_ed25519
+OLLAMA_SSH_KNOWN_HOSTS_FILE=/absolute/private/path/known_hosts
+```
+
+Run `./bin/3-oc-deploy.sh --sync-ollama-ssh`. The script validates the non-command settings, uploads the files to `ajmcp-ollama-ssh`, and preserves the Secret on later ordinary deploys. The sidecar enforces strict host-key checking, permits no remote command, forwards only local `127.0.0.1:11434` to remote `127.0.0.1:11434`, uses keepalives, and reconnects. For strongest server-side enforcement also set `AllowTcpForwarding local` and `PermitOpen 127.0.0.1:11434` in a matching `sshd_config` block.
+
+The AJMCP pod shares the sidecar network namespace and calls only `http://127.0.0.1:11434`; there is no configurable Ollama URL. In `/admin` > Logins & keys > Remote Ollama, test the tunnel and load models. Secret changes require a rollout and do not take effect as a live admin edit.

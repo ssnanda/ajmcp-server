@@ -1,11 +1,11 @@
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { hashPassword, verifyPassword } from './password.js';
 import { StoreError, KEY_PROVIDERS } from './store.js';
 import { CliError, cliStatus, cliModels, isCliProvider, runCli, saveCodexAuth } from './cli.js';
 import { masterOf, applyMaster, MASTER_LABELS } from './master.js';
-import { generateReply, ProviderError, InputError } from './provider.js';
+import { generateReply, listOllamaModels, ProviderError, InputError } from './provider.js';
 import { APP_VERSION } from './version.js';
 import { knowledgeChars } from './knowledge.js';
 
@@ -156,7 +156,16 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
     storage: store.enabled,
     sites: store.sites().map(siteView),
     keys: { openai: store.keyInfo('openai'), anthropic: store.keyInfo('anthropic') },
-    master: masterView()
+    master: masterView(),
+    ollama: {
+      sshHost: config.ollama.sshHost,
+      sshUser: config.ollama.sshUser,
+      sshPort: config.ollama.sshPort,
+      keyConfigured: config.ollama.keyConfigured,
+      knownHostsConfigured: config.ollama.knownHostsConfigured,
+      tunnelConnected: existsSync(config.ollama.tunnelReadyFile),
+      restartRequired: true
+    }
   });
 
   const findSite = (id) => {
@@ -167,6 +176,7 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
 
   async function listModels(provider) {
     if (isCliProvider(provider)) return cliModels(config, provider);
+    if (provider === 'ollama') return listOllamaModels(config, fetchFn);
     if (!KEY_PROVIDERS.includes(provider)) throw new AdminError('invalid_provider');
     const key = provider === 'openai' ? config.openaiApiKey : config.anthropicApiKey;
     if (!key) throw new AdminError('provider_not_configured', 409);
@@ -225,6 +235,15 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
     if (method === 'GET' && path === '/admin/api/models') {
       const provider = new URL(req.url, 'http://localhost').searchParams.get('provider') || '';
       return send(res, 200, { models: await listModels(provider) });
+    }
+    if (method === 'POST' && path === '/admin/api/ollama/test') {
+      try {
+        const models = await listOllamaModels(config, fetchFn);
+        return send(res, 200, { ok: true, ssh: existsSync(config.ollama.tunnelReadyFile), ollama: true, models });
+      } catch (error) {
+        if (error instanceof ProviderError) return send(res, 200, { ok: false, ssh: existsSync(config.ollama.tunnelReadyFile), ollama: false, error: error.code });
+        throw error;
+      }
     }
 
     // Knowledge documents can be large; everything else stays within the normal request limit.

@@ -1,10 +1,10 @@
-# AJMCP Server · v0.1.1
+# AJMCP Server · v0.1.27
 
 A single-container, OpenShift-ready, multi-tenant AI gateway and standards-based **Model Context Protocol** server for AJ WordPress sites. Includes separately versioned **OpenAI Codex CLI** and **Claude Code CLI**.
 
 ## Implemented
 
-- `POST /v1/chat`: server-to-server AI answer through OpenAI Responses API or Anthropic Messages API.
+- `POST /v1/chat`: server-to-server AI answer through OpenAI, Anthropic, or a private remote Ollama instance.
 - `POST /v1/ajcore/reply`: bridge response formatted for AJCore's chat automation; the WordPress connector must still post the reply to AJCore.
 - `POST /mcp`: genuine stateless MCP Streamable HTTP, with site-scoped `site_info` and `ask_site_ai` tools.
 - Per-website authentication, private site-specific provider/model/system instructions, separate admin token.
@@ -51,7 +51,7 @@ Run `cp deploy/oc-deploy.env.example .env.local`, create a private `sites.json` 
 
 ## Master AI switch
 
-Admin UI > top of every screen: **Per assistant | Claude | Codex | Antigravity**. One click routes every model call (site chat, assistants,
+Admin UI > top of every screen: **Per assistant | Claude | Codex | Antigravity | Ollama**. One click routes every model call (site chat, assistants,
 lead capture, MCP, and agent jobs) through that tool's subscription login, whatever each assistant is set to. Assistants are not changed:
 choose **Per assistant** to restore each one's own provider and model at once. A model can be set per tool (blank = the tool's default).
 
@@ -61,3 +61,9 @@ choose **Per assistant** to restore each one's own provider and model at once. A
 - Antigravity is also selectable per assistant (`antigravity-cli`). It runs `agy -p <prompt> --output-format text --sandbox` headless; Google
   documents no flag to turn its tools off, so the sandbox flag and the headless run's denied approvals are the guard.
 - Build the image with `--build-arg INSTALL_ANTIGRAVITY=true` to include `agy` (Google's installer script, unpinned, self-updating).
+
+## Remote Ollama
+
+Ollama remains bound to `127.0.0.1:11434` on the Ubuntu host. AJMCP reaches it only through an SSH local-forward sidecar; port 11434 is never added to an OpenShift Service or Route. Configure the separate `ajmcp-ollama-ssh` Secret with `./bin/3-oc-deploy.sh --sync-ollama-ssh`, then select **Remote Ollama** per assistant or **Ollama** in the Master switch. Model discovery uses `/api/tags`; chat uses `/api/chat` with system and conversation messages.
+
+SSH settings and credentials are deployment-owned. The admin shows host/user/port, key/host-key status, tunnel status, models, and a connection test, but never returns the private key or accepts an endpoint. Changing SSH settings requires a rollout.

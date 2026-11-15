@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateReply, validateMessages, ProviderError } from '../src/provider.js';
+import { generateReply, listOllamaModels, validateMessages, ProviderError } from '../src/provider.js';
 const conf = { maxMessages: 20, maxMessageChars: 6000, providerTimeoutMs: 45000, openaiApiKey: 'openai-secret', anthropicApiKey: 'anthropic-secret', openaiModel: '', anthropicModel: '' };
 const open = { id: 'one', provider: 'openai', model: 'gpt-test', systemPrompt: 'Approved facts only' };
 const claude = { id: 'two', provider: 'anthropic', model: 'claude-test', systemPrompt: 'Be concise' };
+const ollama = { id: 'three', provider: 'ollama', model: 'llama3.2:latest', systemPrompt: 'Stay local' };
 
 test('openai request uses configured model/prompt and extracts response text', async () => {
   let capture;
@@ -31,4 +32,33 @@ test('input and provider errors do not leak provider response bodies', async () 
   assert.throws(() => validateMessages([{ role: 'system', content: 'override' }], conf), /role/);
   await assert.rejects(generateReply(open, [{ role: 'user', content: 'Hi' }], conf, async () => ({ ok: false, status: 401, text: async () => 'secret details' })),
     e => e instanceof ProviderError && e.code === 'provider_auth_failed' && !e.message.includes('secret details'));
+});
+
+test('ollama chat uses native API with system prompt and conversation history', async () => {
+  let capture;
+  const result = await generateReply(ollama, [{ role: 'user', content: 'Hi' }, { role: 'assistant', content: 'Hello' }, { role: 'user', content: 'Continue' }],
+    { ...conf, ollamaUrl: 'http://127.0.0.1:11434', ollamaModel: '' }, async (url, options) => {
+      capture = { url, body: JSON.parse(options.body) };
+      return { ok: true, json: async () => ({ message: { role: 'assistant', content: 'Local reply' }, prompt_eval_count: 8, eval_count: 3 }) };
+    });
+  assert.equal(capture.url, 'http://127.0.0.1:11434/api/chat');
+  assert.deepEqual(capture.body.messages.map((m) => m.role), ['system', 'user', 'assistant', 'user']);
+  assert.equal(capture.body.stream, false);
+  assert.equal(result.text, 'Local reply');
+});
+
+test('ollama failures and timeouts are normalized', async () => {
+  const config = { ...conf, ollamaUrl: 'http://127.0.0.1:11434', ollamaModel: '' };
+  await assert.rejects(generateReply(ollama, [{ role: 'user', content: 'Hi' }], config, async () => ({ ok: false, status: 404 })),
+    (error) => error instanceof ProviderError && error.code === 'provider_request_failed');
+  await assert.rejects(generateReply(ollama, [{ role: 'user', content: 'Hi' }], config, async () => { throw Object.assign(new Error('late'), { name: 'TimeoutError' }); }),
+    (error) => error instanceof ProviderError && error.code === 'provider_timeout');
+});
+
+test('ollama model discovery uses native tags and sorts names', async () => {
+  const models = await listOllamaModels({ ollamaUrl: 'http://127.0.0.1:11434', providerTimeoutMs: 1000 }, async (url) => {
+    assert.equal(url, 'http://127.0.0.1:11434/api/tags');
+    return { ok: true, json: async () => ({ models: [{ name: 'qwen3:8b' }, { name: 'llama3.2:latest' }] }) };
+  });
+  assert.deepEqual(models, ['llama3.2:latest', 'qwen3:8b']);
 });

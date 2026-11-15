@@ -14,7 +14,7 @@ ENV NODE_ENV=production \
     DISABLE_AUTOUPDATER=1
 
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ca-certificates git curl \
+    && apt-get install --no-install-recommends -y ca-certificates git curl openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 RUN if [ "$INSTALL_ANTIGRAVITY" = "true" ]; then \

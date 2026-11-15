@@ -22,3 +22,11 @@ test('parses options and uses reasonable limits for invalid values', () => {
   assert.equal(config.maxConcurrent, 3);
   assert.equal(config.sites[0].provider, 'openai');
 });
+
+test('validates remote Ollama SSH settings and fixes the HTTP endpoint to loopback', () => {
+  const config = loadConfig({ ...valid, OLLAMA_SSH_HOST: 'ollama.example.net', OLLAMA_SSH_USER: 'ollama_tunnel', OLLAMA_SSH_PORT: '2222' });
+  assert.equal(config.ollamaUrl, 'http://127.0.0.1:11434');
+  assert.equal(config.ollama.sshPort, 2222);
+  assert.throws(() => loadConfig({ ...valid, OLLAMA_SSH_HOST: '-oProxyCommand=bad', OLLAMA_SSH_USER: 'ubuntu' }), /Invalid OLLAMA_SSH_HOST/);
+  assert.throws(() => loadConfig({ ...valid, OLLAMA_SSH_HOST: 'host-only.example' }), /must be set together/);
+});

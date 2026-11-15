@@ -12,7 +12,7 @@ export class StoreError extends Error {
 const ID_RE = /^[a-z0-9][a-z0-9-_]{1,63}$/;
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 export const KEY_PROVIDERS = ['openai', 'anthropic'];
-export const PROVIDERS = [...KEY_PROVIDERS, 'claude-cli', 'codex-cli', 'antigravity-cli'];
+export const PROVIDERS = [...KEY_PROVIDERS, 'ollama', 'claude-cli', 'codex-cli', 'antigravity-cli'];
 
 // Saved test texts (question + what we expect), used by the admin "Tests" tab. Small on purpose: admin request bodies are capped.
 function cleanTests(raw) {

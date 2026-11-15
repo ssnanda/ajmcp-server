@@ -2,9 +2,9 @@
 const app = document.getElementById('app');
 let state = null;
 let cli = null;             // installed CLI versions + login state
-const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)'], ['antigravity-cli', 'Google Antigravity (CLI)']];
-const MASTER_CHOICES = [['', 'Per assistant'], ['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Antigravity']];
-const MASTER_CLI = { claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli' };
+const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['ollama', 'Remote Ollama'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)'], ['antigravity-cli', 'Google Antigravity (CLI)']];
+const MASTER_CHOICES = [['', 'Per assistant'], ['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Antigravity'], ['ollama', 'Ollama']];
+const MASTER_PROVIDER = { claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli', ollama: 'ollama' };
 const isCli = (p) => p.endsWith('-cli');
 const TABS = [['sites', 'Assistants'], ['activity', 'Activity'], ['logins', 'Logins & keys'], ['account', 'Account']];
 let tab = TABS.some(([k]) => '#' + k === location.hash) ? location.hash.slice(1) : 'sites';
@@ -78,7 +78,7 @@ function renderLogin(message) {
 
 /* ---------- sites ---------- */
 async function loadModels(provider, datalist) {
-  if (!isCli(provider) && !state.keys[provider].set) { datalist.replaceChildren(); return; }
+  if (!isCli(provider) && provider !== 'ollama' && !state.keys[provider].set) { datalist.replaceChildren(); return; }
   if (!models[provider] || !models[provider].length) {
     try { models[provider] = (await api('/models?provider=' + provider)).models; } catch { models[provider] = []; }
   }
@@ -482,15 +482,17 @@ function masterBar() {
   const seg = h('div', { class: 'seg' }, MASTER_CHOICES.map(([key, label]) => h('button', { type: 'button', class: m.provider === key ? 'on' : '', onclick: () => { if (m.provider !== key) choose(key); } }, label)));
   const kids = [h('div', { class: 'mhead' }, h('strong', null, 'AI master switch'), h('span', { class: 'meta' }, m.provider ? 'Everything runs on ' + m.label + ' — assistants keep their own settings and come back when this is off.' : 'Off: each assistant uses its own provider.')), seg];
   if (m.provider) {
-    const cliKey = MASTER_CLI[m.provider];
-    const ready = cli && cli[m.provider] && cli[m.provider].loggedIn;
+    const providerKey = MASTER_PROVIDER[m.provider];
+    const ready = m.provider === 'ollama' ? state.ollama && state.ollama.tunnelConnected : cli && cli[m.provider] && cli[m.provider].loggedIn;
+    const readyText = ready ? (m.provider === 'ollama' ? 'tunnel connected' : 'logged in')
+      : (m.provider === 'ollama' ? 'tunnel disconnected' : 'not logged in: add the login under Logins & keys');
     const pick = h('input', { list: 'mmodels', placeholder: 'Model (blank = tool default)', value: m.models[m.provider] || '' });
     const list = h('datalist', { id: 'mmodels' });
-    if (models[cliKey]) models[cliKey].forEach((id) => list.append(h('option', { value: id })));
-    else api('/models?provider=' + cliKey).then((r) => { models[cliKey] = r.models || []; if (state && tab) render(); }).catch(() => { models[cliKey] = []; });
+    if (models[providerKey]) models[providerKey].forEach((id) => list.append(h('option', { value: id })));
+    else api('/models?provider=' + providerKey).then((r) => { models[providerKey] = r.models || []; if (state && tab) render(); }).catch(() => { models[providerKey] = []; });
     kids.push(h('div', { class: 'mrow' }, pick, list,
       h('button', { type: 'button', onclick: () => run(async () => { state.master = await api('/master', 'PUT', { provider: m.provider, models: { ...m.models, [m.provider]: pick.value.trim() } }); await refresh(); }, 'Master model saved') }, 'Save model'),
-      h('span', { class: 'pill ' + (ready ? 'on' : 'off') }, ready ? 'logged in' : 'not logged in: add the login under Logins & keys')));
+      h('span', { class: 'pill ' + (ready ? 'on' : 'off') }, readyText)));
     const diff = (m.sites || []).filter((s) => s.own !== s.running);
     kids.push(h('div', { class: 'meta' }, `${(m.sites || []).length} assistant(s) on ${m.label}` + (diff.length ? ` · ${diff.length} switched from their own provider` : '') + '.'));
   }
@@ -552,8 +554,34 @@ function loginsTab() {
         agyRow())),
     collapsible('keys', 'AI provider keys',
       h('span', { class: 'sum' }, keyPill('anthropic'), keyPill('openai')),
-      h('div', { class: 'grid2' }, keyRow('anthropic', 'Anthropic'), keyRow('openai', 'OpenAI')))
+      h('div', { class: 'grid2' }, keyRow('anthropic', 'Anthropic'), keyRow('openai', 'OpenAI'))),
+    ollamaPanel()
   ];
+}
+
+function ollamaPanel() {
+  const o = state.ollama || {};
+  const configured = o.sshHost && o.sshUser && o.keyConfigured && o.knownHostsConfigured;
+  const status = (ok, yes, no) => h('span', { class: 'pill ' + (ok ? 'on' : 'off') }, ok ? yes : no);
+  return collapsible('ollama', 'Remote Ollama',
+    h('span', { class: 'sum' }, status(o.tunnelConnected, 'SSH connected', 'SSH disconnected')),
+    h('div', { class: 'grid2' },
+      h('div', { class: 'sub' }, h('h3', null, 'SSH tunnel'),
+        h('div', { class: 'facts' },
+          field('Host', h('code', null, o.sshHost || 'not configured')),
+          field('User', h('code', null, o.sshUser || 'not configured')),
+          field('Port', h('code', null, o.sshPort || 22)),
+          field('Private key Secret', status(o.keyConfigured, 'mounted', 'missing')),
+          field('known_hosts Secret', status(o.knownHostsConfigured, 'mounted', 'missing')))),
+      h('div', { class: 'sub' }, h('h3', null, 'Ollama'),
+        h('div', { class: 'meta' }, 'Tunnel settings come from OpenShift Secrets. Changes require a deployment rollout.'),
+        h('div', { class: 'actions mt' }, h('button', { type: 'button', disabled: !configured || null, onclick: () => run(async () => {
+          const r = await api('/ollama/test', 'POST');
+          models.ollama = r.models || [];
+          notice = r.ok ? { kind: 'ok', text: `Ollama connected · ${models.ollama.length} model(s)` } : { kind: 'err', text: `Ollama test failed — ${words(r.error)}` };
+          await refresh();
+        }) }, 'Test connection')),
+        h('div', { class: 'meta mt' }, models.ollama && models.ollama.length ? models.ollama.join(', ') : 'No models loaded.'))));
 }
 
 /* ---------- Activity: did the request reach the server, and what happened ---------- */
