@@ -671,21 +671,37 @@ function transcriptView(entry) {
 function activityTab() {
   if (!activity.loaded) loadActivity();
   ensureActivityTimer();
-  const rows = activity.entries.flatMap((e) => {
+  // One row per conversation: requests of the same assistant + session are grouped (newest first), the newest one leads.
+  const groups = []; const byKey = new Map();
+  for (const e of activity.entries) {
+    const key = e.sessionId != null ? `${e.site}|${e.assistant || ''}|${e.channel || ''}|${e.sessionId}` : e.requestId;
+    let g = byKey.get(key);
+    if (!g) { g = { key, e, items: [] }; byKey.set(key, g); groups.push(g); }
+    g.items.push(e);
+  }
+  const rows = groups.flatMap(({ key, e, items }) => {
     const bad = !e.running && (e.status >= 400 || e.error);
+    const failed = items.filter((x) => !x.running && (x.status >= 400 || x.error)).length;
+    const modelsUsed = [...new Set(items.map((x) => x.model).filter(Boolean))];
+    let withText = items.find((x) => x.transcript);
+    // If the client sends only the newest message each time, stitch the turns together oldest first.
+    if (withText && items.length > 1 && withText.transcript.length <= 2) {
+      const turns = items.filter((x) => x.transcript).reverse().flatMap((x) => x.transcript);
+      withText = { ...withText, transcript: turns };
+    }
     const who = e.assistant && e.assistant !== e.site ? `${e.site} → ${e.assistant}` : (e.site || '—');
-    const expanded = openActivity.has(e.requestId);
+    const expanded = openActivity.has(key);
     const row = h('tr', { class: bad ? 'bad' : '' },
       h('td', null, clock(e.t)),
       h('td', null, who, e.via && e.via !== 'primary' ? h('span', { class: 'meta' }, ' · ' + e.via) : null),
       h('td', null, ROUTE_NAMES[e.route] || e.route, e.channel ? h('span', { class: 'meta' }, ' · ' + e.channel) : null),
-      h('td', null, e.model ? h('code', null, e.model) : '—', e.provider ? h('span', { class: 'meta' }, ' · ' + e.provider) : null),
-      h('td', null, e.sessionId != null ? '#' + e.sessionId : '—', e.chars != null ? h('span', { class: 'meta' }, ` · ${e.chars} chars`) : null),
+      h('td', null, modelsUsed.length ? modelsUsed.map((m, k) => [k ? ', ' : '', h('code', null, m)]).flat() : '—', e.provider ? h('span', { class: 'meta' }, ' · ' + e.provider) : null),
+      h('td', null, e.sessionId != null ? '#' + e.sessionId : '—', items.length > 1 ? h('span', { class: 'meta' }, ` · ${items.length} messages`) : (e.chars != null ? h('span', { class: 'meta' }, ` · ${e.chars} chars`) : null)),
       h('td', null, h('span', { class: 'pill ' + (e.running ? 'off' : bad ? 'bad' : 'on') }, e.running ? 'running…' : String(e.status))),
       h('td', null, took(e.ms)),
-      h('td', null, e.error ? words(e.error) + (e.host ? ` (${e.host})` : '') : (e.running ? '' : 'ok'),
-        e.transcript ? h('button', { type: 'button', class: 'audit-toggle', onclick: () => { expanded ? openActivity.delete(e.requestId) : openActivity.add(e.requestId); render(); } }, expanded ? 'Hide' : 'View conversation') : null));
-    return expanded ? [row, h('tr', { class: 'audit-row' }, h('td', { colspan: 8 }, transcriptView(e)))] : [row];
+      h('td', null, e.error ? words(e.error) + (e.host ? ` (${e.host})` : '') : (e.running ? '' : 'ok'), failed && !bad ? h('span', { class: 'meta' }, ` · ${failed} failed earlier`) : null,
+        withText ? h('button', { type: 'button', class: 'audit-toggle', onclick: () => { expanded ? openActivity.delete(key) : openActivity.add(key); render(); } }, expanded ? 'Hide' : 'View conversation') : null));
+    return expanded && withText ? [row, h('tr', { class: 'audit-row' }, h('td', { colspan: 8 }, transcriptView(withText)))] : [row];
   });
   const last = activity.entries[0];
   return [h('section', { class: 'card' },
