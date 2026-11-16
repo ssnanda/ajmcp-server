@@ -686,7 +686,7 @@ function activityTab() {
   if (!activity.loaded) loadActivity();
   ensureActivityTimer();
   const rows = activity.entries.flatMap((e) => {
-    const bad = e.status >= 400 || e.error;
+    const bad = !e.running && (e.status >= 400 || e.error);
     const who = e.assistant && e.assistant !== e.site ? `${e.site} → ${e.assistant}` : (e.site || '—');
     const expanded = openActivity.has(e.requestId);
     const row = h('tr', { class: bad ? 'bad' : '' },
@@ -694,7 +694,7 @@ function activityTab() {
       h('td', null, who, e.via && e.via !== 'primary' ? h('span', { class: 'meta' }, ' · ' + e.via) : null),
       h('td', null, ROUTE_NAMES[e.route] || e.route, e.channel ? h('span', { class: 'meta' }, ' · ' + e.channel) : null),
       h('td', null, e.sessionId != null ? '#' + e.sessionId : '—', e.chars != null ? h('span', { class: 'meta' }, ` · ${e.chars} chars`) : null),
-      h('td', null, h('span', { class: 'pill ' + (bad ? 'bad' : 'on') }, String(e.status))),
+      h('td', null, h('span', { class: 'pill ' + (e.running ? 'off' : bad ? 'bad' : 'on') }, e.running ? 'running…' : String(e.status))),
       h('td', null, took(e.ms)),
       h('td', null, e.error ? words(e.error) + (e.host ? ` (${e.host})` : '') : (e.provider || 'ok'),
         e.transcript ? h('button', { type: 'button', class: 'audit-toggle', onclick: () => { expanded ? openActivity.delete(e.requestId) : openActivity.add(e.requestId); render(); } }, expanded ? 'Hide' : 'View conversation') : null));

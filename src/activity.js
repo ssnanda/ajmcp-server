@@ -17,7 +17,7 @@ function cleanTranscript(raw) {
 }
 
 export class ActivityLog {
-  constructor(max = 300) { this.max = max; this.items = []; this.since = new Date().toISOString(); }
+  constructor(max = 300) { this.max = max; this.items = []; this.running = new Set(); this.since = new Date().toISOString(); }
 
   add(entry) {
     const clean = {};
@@ -34,9 +34,22 @@ export class ActivityLog {
 
   clear() { this.items = []; }
 
+  /** Marks a request as running until `end` (a slow model call would otherwise show nothing until it finishes). Returns a handle. */
+  start(base, note) {
+    const live = { base, note, start: Date.now() };
+    this.running.add(live);
+    return live;
+  }
+  end(live) { this.running.delete(live); }
+
   /** Newest first. `problemsOnly` keeps entries that failed (status >= 400 or an error code). */
   list({ limit = 100, problemsOnly = false } = {}) {
     const rows = [];
+    for (const live of [...this.running].reverse()) {
+      const n = live.note || {};
+      const e = { ...live.base, ...Object.fromEntries(FIELDS.filter((k) => n[k] !== undefined && n[k] !== null && n[k] !== '').map((k) => [k, typeof n[k] === 'string' ? n[k].slice(0, 120) : n[k]])), status: 0, running: true, ms: Date.now() - live.start };
+      if (!problemsOnly) rows.push(e);
+    }
     for (let i = this.items.length - 1; i >= 0 && rows.length < limit; i -= 1) {
       const e = this.items[i];
       if (problemsOnly && !(e.status >= 400 || e.error)) continue;

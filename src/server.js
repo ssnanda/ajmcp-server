@@ -106,6 +106,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
     const path = new URL(req.url || '/', 'http://localhost').pathname;
     let status = 500;
     const note = {};   // bounded admin audit details; never credentials or arbitrary request bodies
+    const live = path.startsWith('/v1/') || path === '/mcp' ? activity.start({ t: new Date().toISOString(), requestId: id, method: req.method, route: path }, note) : null;
     try {
       // Health probes reach the pod using its internal IP/Host, not the public OpenShift Route.
       // No secrets or tenant information are exposed by these probe endpoints.
@@ -227,6 +228,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
       note.error = note.error || message;
       return json(res, status, { error: message, requestId: id }, id);
     } finally {
+      if (live) activity.end(live);
       // Transcripts stay in the in-memory admin audit only; ordinary container logs contain metadata, never text or credentials.
       const entry = { t: new Date().toISOString(), requestId: id, method: req.method, route: path, status: res.statusCode || status, ms: Date.now() - start, ...note };
       console.info(JSON.stringify({ t: entry.t, requestId: id, method: req.method, route: path, status: entry.status, durationMs: entry.ms,
