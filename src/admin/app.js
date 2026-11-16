@@ -562,7 +562,7 @@ function loginsTab() {
       h('div', { class: 'grid2' },
         cliRow('claude', 'Claude', 'On your Mac run: claude setup-token', 'claudeToken'),
         cliRow('codex', 'ChatGPT (Codex)', 'On your Mac run: codex login, then paste ~/.codex/auth.json', 'codexAuth'),
-        cliRow('antigravity', 'Google Antigravity (agy)', 'On your Mac run: pbcopy < ~/.gemini/jetski-standalone-oauth-token, then paste', 'agyAuth'),
+        cliRow('antigravity', 'Google Antigravity (agy)', 'Sign in inside the pod: oc exec -it -n ajmcp deploy/ajmcp-server -c ajmcp -- env HOME=/data/home agy', 'agyAuth'),
         cliRow('copilot', 'GitHub Copilot', 'GitHub fine-grained token with the Copilot Requests permission', 'copilotToken'))),
     timeoutsPanel(),
     collapsible('keys', 'AI provider keys',

@@ -57,7 +57,7 @@ lead capture, MCP, and agent jobs) through that tool's subscription login, whate
 choose **Per assistant** to restore each one's own provider and model at once. A model can be set per tool (blank = the tool's default).
 
 - Saved in `DATA_DIR/settings.json`; the deploy default is the `AI_MASTER_PROVIDER` environment variable (`claude`, `codex`, `antigravity`, `copilot` or `ollama`).
-- With the master on, no API key is used: Claude / Codex / Antigravity run on their saved logins (Logins & keys). Antigravity (`agy`) signs in with your Google account: on a Mac where `agy` works, copy `~/.gemini/jetski-standalone-oauth-token` and paste it under Logins & keys (the pod has no OS keyring, so the saved file is what it reads).
+- With the master on, no API key is used: Claude / Codex / Antigravity run on their saved logins (Logins & keys). Antigravity (`agy`) signs in once inside the pod: `oc exec -it -n ajmcp deploy/ajmcp-server -c ajmcp -- env HOME=/data/home agy`, then complete the Google sign-in and paste the code. The login is stored in `/data/home/.gemini/jetski-standalone-oauth-token` (persistent volume). A token copied from a Mac usually does not work: the Mac keeps its current login in the macOS keyring and the file there is stale.
 - Antigravity is also selectable per assistant (`antigravity-cli`). It runs `agy -p <prompt> --output-format text --sandbox` headless; Google
   documents no flag to turn its tools off, so the sandbox flag and the headless run's denied approvals are the guard.
 - The image includes `agy` by default (Google's installer script, unpinned, self-updating); build with `--build-arg INSTALL_ANTIGRAVITY=false` to leave it out.
