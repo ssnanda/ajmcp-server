@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { identityForBearer, authorizeSite } from './auth.js';
 import { Limiter } from './limits.js';
 import { InputError } from './provider.js';
-import { applyMaster } from './master.js';
+import { applyMaster, describeModel } from './master.js';
 import { runChat } from './chat.js';
 import { routeChat, ConversationStore, KEY_RE } from './routing.js';
 import { LeadLimiter } from './leads.js';
@@ -158,6 +158,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
         const site = authorizeSite(identity);
         if (!site) { status = 403; return json(res, status, { error: 'site_token_required' }, id); }
         const body = await readBody(req, config.maxRequestBytes);
+        Object.assign(note, describeModel(site, config)); // known up front, so a slow or failed call still shows its model
         note.channel = body && body.channel === 'sms' ? 'sms' : 'chat';
         if (body && Number.isSafeInteger(body.sessionId)) note.sessionId = body.sessionId;
         if (body && typeof body.message === 'string') note.chars = body.message.length;
@@ -195,6 +196,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
         const site = authorizeSite(identity);
         if (!site) { status = 403; return json(res, status, { error: 'site_token_required' }, id); }
         const body = await readBody(req, config.maxAssistantChars + 40000);
+        Object.assign(note, describeModel(site, config));
         const slot = limiter.acquire(identity);
         if (!slot.ok) { status = slot.status; return json(res, status, { error: slot.code }, id); }
         try {
@@ -232,7 +234,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
       // Transcripts stay in the in-memory admin audit only; ordinary container logs contain metadata, never text or credentials.
       const entry = { t: new Date().toISOString(), requestId: id, method: req.method, route: path, status: res.statusCode || status, ms: Date.now() - start, ...note };
       console.info(JSON.stringify({ t: entry.t, requestId: id, method: req.method, route: path, status: entry.status, durationMs: entry.ms,
-        site: note.site, channel: note.channel, sessionId: note.sessionId, error: note.error }));
+        site: note.site, channel: note.channel, sessionId: note.sessionId, provider: note.provider, model: note.model, error: note.error }));
       // Only the API routes matter here; browser page loads, favicon and probes would only add noise.
       if (path.startsWith('/v1/') || path === '/mcp') activity.add(entry);
     }

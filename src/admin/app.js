@@ -693,12 +693,13 @@ function activityTab() {
       h('td', null, clock(e.t)),
       h('td', null, who, e.via && e.via !== 'primary' ? h('span', { class: 'meta' }, ' · ' + e.via) : null),
       h('td', null, ROUTE_NAMES[e.route] || e.route, e.channel ? h('span', { class: 'meta' }, ' · ' + e.channel) : null),
+      h('td', null, e.model ? h('code', null, e.model) : '—', e.provider ? h('span', { class: 'meta' }, ' · ' + e.provider) : null),
       h('td', null, e.sessionId != null ? '#' + e.sessionId : '—', e.chars != null ? h('span', { class: 'meta' }, ` · ${e.chars} chars`) : null),
       h('td', null, h('span', { class: 'pill ' + (e.running ? 'off' : bad ? 'bad' : 'on') }, e.running ? 'running…' : String(e.status))),
       h('td', null, took(e.ms)),
-      h('td', null, e.error ? words(e.error) + (e.host ? ` (${e.host})` : '') : (e.provider || 'ok'),
+      h('td', null, e.error ? words(e.error) + (e.host ? ` (${e.host})` : '') : (e.running ? '' : 'ok'),
         e.transcript ? h('button', { type: 'button', class: 'audit-toggle', onclick: () => { expanded ? openActivity.delete(e.requestId) : openActivity.add(e.requestId); render(); } }, expanded ? 'Hide' : 'View conversation') : null));
-    return expanded ? [row, h('tr', { class: 'audit-row' }, h('td', { colspan: 7 }, transcriptView(e)))] : [row];
+    return expanded ? [row, h('tr', { class: 'audit-row' }, h('td', { colspan: 8 }, transcriptView(e)))] : [row];
   });
   const last = activity.entries[0];
   return [h('section', { class: 'card' },
@@ -716,7 +717,7 @@ function activityTab() {
     activity.error ? h('div', { class: 'notice err mt' }, activity.error) : null,
     rows.length
       ? h('div', { class: 'tblwrap mt' }, h('table', { class: 'tbl' },
-          h('thead', null, h('tr', null, ['Time', 'Assistant', 'Request', 'Session', 'Status', 'Took', 'Result'].map((c) => h('th', null, c)))),
+          h('thead', null, h('tr', null, ['Time', 'Assistant', 'Request', 'Model', 'Session', 'Status', 'Took', 'Result'].map((c) => h('th', null, c)))),
           h('tbody', null, rows)))
       : h('div', { class: 'empty mt' }, activity.loaded ? 'No requests yet. If a chat message or text was sent and nothing appears here, it never reached this server.' : 'Loading…'))];
 }

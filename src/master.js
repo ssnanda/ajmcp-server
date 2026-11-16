@@ -34,3 +34,10 @@ export function timeoutMs(config, provider, model, fallbackMs) {
   const sec = (model && t[model]) || t[provider];
   return sec ? sec * 1000 : fallbackMs;
 }
+
+/** Provider and model a call will use (master switch applied; the provider's configured default when none is set), for the activity log. */
+export function describeModel(site, config) {
+  const s = applyMaster(site, config);
+  const dflt = s.provider === 'openai' ? config.openaiModel : s.provider === 'ollama' ? config.ollamaModel : s.provider === 'anthropic' ? config.anthropicModel : '';
+  return { provider: s.provider, model: s.model || dflt || 'default' };
+}
