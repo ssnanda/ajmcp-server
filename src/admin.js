@@ -159,6 +159,7 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
     sites: store.sites().map(siteView),
     keys: { openai: store.keyInfo('openai'), anthropic: store.keyInfo('anthropic') },
     master: masterView(),
+    timeouts: { ...(config.timeouts || {}) },
     ollama: {
       sshHost: config.ollama.sshHost,
       sshUser: config.ollama.sshUser,
@@ -313,6 +314,10 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
       store.setMaster(body);
       return send(res, 200, masterView());
     }
+    if (method === 'PUT' && path === '/admin/api/timeouts') {
+      store.setTimeouts(body.timeouts);
+      return send(res, 200, { ...(config.timeouts || {}) });
+    }
     if (method === 'PUT' && path === '/admin/api/keys') {
       for (const provider of KEY_PROVIDERS) {
         if (!(provider in body)) continue;
@@ -327,10 +332,14 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
         if (body.claudeToken !== null && typeof body.claudeToken !== 'string') throw new AdminError('invalid_api_key');
         store.setKey('claude', body.claudeToken);
       }
+      if ('copilotToken' in body) {
+        if (body.copilotToken !== null && typeof body.copilotToken !== 'string') throw new AdminError('invalid_api_key');
+        store.setKey('copilot', body.copilotToken);
+      }
       if ('codexAuth' in body) saveCodexAuth(config, body.codexAuth);
       return send(res, 200, await cliStatus(config));
     }
-    const cliTest = /^\/admin\/api\/cli\/(claude|codex|antigravity)\/test$/.exec(path);
+    const cliTest = /^\/admin\/api\/cli\/(claude|codex|antigravity|copilot)\/test$/.exec(path);
     if (method === 'POST' && cliTest) {
       const provider = `${cliTest[1]}-cli`;
       try {

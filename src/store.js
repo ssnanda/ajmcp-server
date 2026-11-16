@@ -12,7 +12,7 @@ export class StoreError extends Error {
 const ID_RE = /^[a-z0-9][a-z0-9-_]{1,63}$/;
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 export const KEY_PROVIDERS = ['openai', 'anthropic'];
-export const PROVIDERS = [...KEY_PROVIDERS, 'ollama', 'claude-cli', 'codex-cli', 'antigravity-cli'];
+export const PROVIDERS = [...KEY_PROVIDERS, 'ollama', 'claude-cli', 'codex-cli', 'antigravity-cli', 'copilot-cli'];
 
 // Saved test texts (question + what we expect), used by the admin "Tests" tab. Small on purpose: admin request bodies are capped.
 function cleanTests(raw) {
@@ -55,6 +55,22 @@ function cleanMaster(input) {
   return { provider, models };
 }
 
+// Per-model / per-provider call time limits in seconds. Key = model id (e.g. qwen3:14b) or provider (ollama, claude-cli ...).
+export const TIMEOUT_MIN = 5;
+export const TIMEOUT_MAX = 600;
+function cleanTimeouts(raw) {
+  const out = {};
+  if (raw == null) return out;
+  if (typeof raw !== 'object' || Array.isArray(raw) || Object.keys(raw).length > 40) throw new StoreError('invalid_timeouts');
+  for (const [k, v] of Object.entries(raw)) {
+    const key = String(k).trim();
+    const sec = Number(v);
+    if (!MODEL_RE.test(key) || !Number.isInteger(sec) || sec < TIMEOUT_MIN || sec > TIMEOUT_MAX) throw new StoreError('invalid_timeouts');
+    out[key] = sec;
+  }
+  return out;
+}
+
 // Normalizes a runtime site (seed file token or stored hash) to the persisted shape. Never keeps a plain token.
 function toStored(site) {
   return {
@@ -89,9 +105,9 @@ export class SettingsStore {
   constructor(config) {
     this.config = config;
     this.file = config.dataDir ? join(config.dataDir, 'settings.json') : '';
-    this.env = { openai: config.openaiApiKey, anthropic: config.anthropicApiKey, claude: config.claudeOauthToken, passwordHash: config.adminPasswordHash };
+    this.env = { openai: config.openaiApiKey, anthropic: config.anthropicApiKey, claude: config.claudeOauthToken, copilot: config.copilotToken, passwordHash: config.adminPasswordHash };
     this.envMaster = { provider: config.master ? config.master.provider : '', models: { ...emptyMaster().models, ...(config.master ? config.master.models : {}) } };
-    this.state = { sites: undefined, keys: {}, passwordHash: '', passwordBase: '', master: undefined };
+    this.state = { sites: undefined, keys: {}, passwordHash: '', passwordBase: '', master: undefined, timeouts: {} };
   }
 
   get enabled() { return Boolean(this.file); }
@@ -103,10 +119,11 @@ export class SettingsStore {
     const data = JSON.parse(raw);
     this.state = {
       sites: Array.isArray(data.sites) ? data.sites.map(toStored) : undefined,
-      keys: { openai: String(data.keys?.openai || ''), anthropic: String(data.keys?.anthropic || ''), claude: String(data.keys?.claude || '') },
+      keys: { openai: String(data.keys?.openai || ''), anthropic: String(data.keys?.anthropic || ''), claude: String(data.keys?.claude || ''), copilot: String(data.keys?.copilot || '') },
       passwordHash: String(data.passwordHash || ''),
       passwordBase: String(data.passwordBase || ''),
-      master: data.master && typeof data.master === 'object' ? cleanMaster(data.master) : undefined
+      master: data.master && typeof data.master === 'object' ? cleanMaster(data.master) : undefined,
+      timeouts: cleanTimeouts(data.timeouts)
     };
     this.apply();
   }
@@ -117,6 +134,8 @@ export class SettingsStore {
     config.openaiApiKey = state.keys.openai || env.openai;
     config.anthropicApiKey = state.keys.anthropic || env.anthropic;
     config.claudeOauthToken = state.keys.claude || env.claude;
+    config.copilotToken = state.keys.copilot || env.copilot;
+    config.timeouts = state.timeouts || {};
     config.master = state.master || this.envMaster; // the saved switch wins; otherwise the deploy's AI_MASTER_PROVIDER
     // A password changed in the UI wins, unless the deploy script later issued a new one (--reset-admin).
     config.adminPasswordHash = state.passwordHash && state.passwordBase === env.passwordHash ? state.passwordHash : env.passwordHash;
@@ -127,7 +146,7 @@ export class SettingsStore {
     try {
       mkdirSync(this.config.dataDir, { recursive: true });
       const tmp = `${this.file}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ sites: next.sites, keys: next.keys, passwordHash: next.passwordHash, passwordBase: next.passwordBase, master: next.master }, null, 2) + '\n', { mode: 0o600 });
+      writeFileSync(tmp, JSON.stringify({ sites: next.sites, keys: next.keys, passwordHash: next.passwordHash, passwordBase: next.passwordBase, master: next.master, timeouts: next.timeouts }, null, 2) + '\n', { mode: 0o600 });
       renameSync(tmp, this.file);
     } catch (error) {
       if (error instanceof StoreError) throw error;
@@ -299,7 +318,7 @@ export class SettingsStore {
   }
 
   setKey(provider, value) {
-    if (![...KEY_PROVIDERS, 'claude'].includes(provider)) throw new StoreError('invalid_provider');
+    if (![...KEY_PROVIDERS, 'claude', 'copilot'].includes(provider)) throw new StoreError('invalid_provider');
     const key = value === null ? '' : String(value).trim();
     if (key && (key.length < 20 || key.length > 2000 || /\s/.test(key))) throw new StoreError('invalid_api_key');
     this.write({ ...this.state, sites: this.state.sites ?? this.sites(), keys: { ...this.state.keys, [provider]: key } });
@@ -308,6 +327,11 @@ export class SettingsStore {
   /** The master AI switch: provider '' (off) | claude | codex | antigravity, plus an optional model for each. */
   setMaster(input) {
     this.write({ ...this.state, sites: this.state.sites ?? this.sites(), master: cleanMaster(input) });
+  }
+
+  /** Time limits in seconds, keyed by model id or provider; {} clears them all. */
+  setTimeouts(input) {
+    this.write({ ...this.state, sites: this.state.sites ?? this.sites(), timeouts: cleanTimeouts(input) });
   }
 
   setPasswordHash(hash) {

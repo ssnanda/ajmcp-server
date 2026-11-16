@@ -20,5 +20,6 @@ spec:
       buildArgs:
         - { name: CODEX_VERSION, value: "0.167.1" }
         - { name: CLAUDE_VERSION, value: "2.1.322" }
+        - { name: COPILOT_VERSION, value: "1.0.112" }
   output:
     to: { kind: ImageStreamTag, name: "ajmcp-server:latest" }

@@ -1,6 +1,6 @@
 import { spawn, execFile } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
-import { agentProviderFor } from './master.js';
+import { agentProviderFor, timeoutMs } from './master.js';
 import { cliHome } from './cli.js';
 
 function toolEnv(config, provider) {
@@ -13,6 +13,7 @@ function toolEnv(config, provider) {
   };
   const master = config.master && config.master.provider; // master on: the tool's subscription login, never an API key
   if (!master && provider === 'codex' && config.openaiApiKey) env.OPENAI_API_KEY = config.openaiApiKey;
+  if (provider === 'copilot' && config.copilotToken) env.COPILOT_GITHUB_TOKEN = config.copilotToken;
   if (!master && provider === 'claude' && config.anthropicApiKey) env.ANTHROPIC_API_KEY = config.anthropicApiKey;
   return env;
 }
@@ -20,7 +21,7 @@ function toolEnv(config, provider) {
 export function runAgent(provider, prompt, config, spawnFn = spawn) {
   if (!config.enableAgentJobs) throw Object.assign(new Error('agent_jobs_disabled'), { status: 403 });
   provider = agentProviderFor(provider, config); // the master switch (when on) picks the tool for every job
-  if (!['codex', 'claude', 'antigravity'].includes(provider)) throw Object.assign(new Error('unknown_agent'), { status: 400 });
+  if (!['codex', 'claude', 'antigravity', 'copilot'].includes(provider)) throw Object.assign(new Error('unknown_agent'), { status: 400 });
   if (typeof prompt !== 'string' || prompt.length < 1 || prompt.length > 4000) {
     throw Object.assign(new Error('invalid_prompt'), { status: 400 });
   }
@@ -30,13 +31,15 @@ export function runAgent(provider, prompt, config, spawnFn = spawn) {
   }
   try { accessSync(config.agentWorkspace, constants.R_OK); }
   catch { throw Object.assign(new Error('agent_workspace_unavailable'), { status: 503 }); }
-  const file = provider === 'codex' ? 'codex' : provider === 'antigravity' ? 'agy' : 'claude';
+  const file = provider === 'codex' ? 'codex' : provider === 'antigravity' ? 'agy' : provider === 'copilot' ? 'copilot' : 'claude';
   const model = (config.master && config.master.provider === provider && config.master.models && config.master.models[provider]) || '';
   const args = provider === 'codex'
     ? ['exec', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check', ...(model ? ['-m', model] : []), prompt]
     : provider === 'antigravity'
       ? ['--output-format', 'text', '--sandbox', ...(model ? ['--model', model] : []), '-p', prompt]
-      : ['-p', prompt, '--output-format', 'text', '--tools', '', '--no-session-persistence', ...(model ? ['--model', model] : [])];
+      : provider === 'copilot'
+        ? ['-s', '--no-ask-user', '--no-auto-update', '--deny-tool=shell', '--deny-tool=write', ...(model ? ['--model', model] : []), '-p', prompt]
+        : ['-p', prompt, '--output-format', 'text', '--tools', '', '--no-session-persistence', ...(model ? ['--model', model] : [])];
 
   return new Promise((resolve, reject) => {
     const child = spawnFn(file, args, {
@@ -44,7 +47,7 @@ export function runAgent(provider, prompt, config, spawnFn = spawn) {
       env: toolEnv(config, provider), stdio: ['ignore', 'pipe', 'pipe']
     });
     let stdout = ''; let exceeded = false; let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, config.agentTimeoutMs);
+    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs(config, { codex: 'codex-cli', claude: 'claude-cli', antigravity: 'antigravity-cli', copilot: 'copilot-cli' }[provider], model, config.agentTimeoutMs));
     child.stdout?.on('data', chunk => {
       stdout += chunk.toString('utf8');
       if (stdout.length > 65536) { exceeded = true; child.kill('SIGKILL'); }
@@ -72,6 +75,6 @@ function fixedVersion(binary) {
 }
 
 export async function installedToolVersions() {
-  const [codex, claude, antigravity] = await Promise.all([fixedVersion('codex'), fixedVersion('claude'), fixedVersion('agy')]);
-  return { codex, claude, antigravity };
+  const [codex, claude, antigravity, copilot] = await Promise.all([fixedVersion('codex'), fixedVersion('claude'), fixedVersion('agy'), fixedVersion('copilot')]);
+  return { codex, claude, antigravity, copilot };
 }

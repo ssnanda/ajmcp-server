@@ -2,9 +2,9 @@
 const app = document.getElementById('app');
 let state = null;
 let cli = null;             // installed CLI versions + login state
-const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['ollama', 'Remote Ollama'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)'], ['antigravity-cli', 'Google Antigravity (CLI)']];
-const MASTER_CHOICES = [['', 'Per assistant'], ['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Antigravity'], ['ollama', 'Ollama']];
-const MASTER_PROVIDER = { claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli', ollama: 'ollama' };
+const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['ollama', 'Remote Ollama'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)'], ['antigravity-cli', 'Google Antigravity (CLI)'], ['copilot-cli', 'GitHub Copilot (CLI)']];
+const MASTER_CHOICES = [['', 'Per assistant'], ['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Antigravity'], ['copilot', 'Copilot'], ['ollama', 'Ollama']];
+const MASTER_PROVIDER = { claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli', copilot: 'copilot-cli', ollama: 'ollama' };
 const isCli = (p) => p.endsWith('-cli');
 const TABS = [['sites', 'Assistants'], ['activity', 'Activity'], ['logins', 'Logins & keys'], ['account', 'Account']];
 let tab = TABS.some(([k]) => '#' + k === location.hash) ? location.hash.slice(1) : 'sites';
@@ -424,7 +424,8 @@ function agyRow() {
 
 function cliRow(name, label, how, field, build) {
   const info = cli && cli[name];
-  const input = h(field === 'claudeToken' ? 'input' : 'textarea', field === 'claudeToken'
+  const isToken = field === 'claudeToken' || field === 'copilotToken';
+  const input = h(isToken ? 'input' : 'textarea', isToken
     ? { type: 'password', autocomplete: 'off', placeholder: 'Paste token' } : { placeholder: 'Paste auth.json' });
   const status = !info ? h('span', { class: 'pill bad' }, 'unavailable')
     : !info.version ? h('span', { class: 'pill bad' }, 'not installed')
@@ -442,7 +443,7 @@ function cliRow(name, label, how, field, build) {
         const r = await api('/cli/' + name + '/test', 'POST');
         notice = r.ok ? { kind: 'ok', text: `${label}: replied “${r.reply}”` } : { kind: 'err', text: `${label}: test failed — ${words(r.error)}${r.detail ? ' — ' + r.detail : ''}` };
       }) }, 'Test'),
-      field === 'claudeToken' && info && info.tokenSet ? h('button', { class: 'danger', type: 'button', onclick: () => run(async () => { cli = await api('/cli', 'PUT', { claudeToken: null }); }, 'Claude token removed') }, 'Remove') : null));
+      isToken && info && info.tokenSet ? h('button', { class: 'danger', type: 'button', onclick: () => run(async () => { cli = await api('/cli', 'PUT', { [field]: null }); }, label + ' token removed') }, 'Remove') : null));
 }
 
 /* ---------- keys / password ---------- */
@@ -477,27 +478,30 @@ function tile(tone, n, label) { return h('div', { class: 'tile ' + tone }, h('di
 /* ---------- master switch: every assistant, chat, SMS, lead and agent job through one tool ---------- */
 function masterBar() {
   const m = state.master || { provider: '', models: {}, sites: [] };
-  const choose = (provider) => run(async () => { state.master = await api('/master', 'PUT', { provider, models: m.models }); await refresh(); },
-    provider ? 'All AI now runs on ' + (MASTER_CHOICES.find(([k]) => k === provider) || [0, provider])[1] : 'Each assistant uses its own provider again');
+  const saveMaster = (provider, mm, text) => run(async () => { state.master = await api('/master', 'PUT', { provider, models: mm }); await refresh(); }, text);
+  const choose = (provider) => saveMaster(provider, m.models, provider ? 'All AI now runs on ' + (MASTER_CHOICES.find(([k]) => k === provider) || [0, provider])[1] : 'Each assistant uses its own provider again');
   const seg = h('div', { class: 'seg' }, MASTER_CHOICES.map(([key, label]) => h('button', { type: 'button', class: m.provider === key ? 'on' : '', onclick: () => { if (m.provider !== key) choose(key); } }, label)));
-  const kids = [h('div', { class: 'mhead' }, h('strong', null, 'AI master switch'), h('span', { class: 'meta' }, m.provider ? 'Everything runs on ' + m.label + ' — assistants keep their own settings and come back when this is off.' : 'Off: each assistant uses its own provider.')), seg];
+  const kids = [h('div', { class: 'mhead' }, h('strong', null, 'AI master switch'), seg)];
   if (m.provider) {
     const providerKey = MASTER_PROVIDER[m.provider];
     const ready = m.provider === 'ollama' ? state.ollama && state.ollama.tunnelConnected : cli && cli[m.provider] && cli[m.provider].loggedIn;
     const readyText = ready ? (m.provider === 'ollama' ? 'tunnel connected' : 'logged in')
-      : (m.provider === 'ollama' ? 'tunnel disconnected' : 'not logged in: add the login under Logins & keys');
-    const pick = h('input', { list: 'mmodels', placeholder: 'Model (blank = tool default)', value: m.models[m.provider] || '' });
+      : (m.provider === 'ollama' ? 'tunnel disconnected' : 'not logged in');
+    const pick = h('input', { list: 'mmodels', placeholder: 'Model (blank = default)', value: m.models[m.provider] || '' });
     const list = h('datalist', { id: 'mmodels' });
     if (models[providerKey]) models[providerKey].forEach((id) => list.append(h('option', { value: id })));
     else api('/models?provider=' + providerKey).then((r) => { models[providerKey] = r.models || []; if (state && tab) render(); }).catch(() => { models[providerKey] = []; });
-    kids.push(h('div', { class: 'mrow' }, pick, list,
-      h('button', { type: 'button', onclick: () => run(async () => { state.master = await api('/master', 'PUT', { provider: m.provider, models: { ...m.models, [m.provider]: pick.value.trim() } }); await refresh(); }, 'Master model saved') }, 'Save model'),
-      h('span', { class: 'pill ' + (ready ? 'on' : 'off') }, readyText)));
+    // Saves as soon as a model is picked or typed (change fires on selection and on leaving the field).
+    pick.addEventListener('change', () => { if (pick.value.trim() !== (m.models[m.provider] || '')) saveMaster(m.provider, { ...m.models, [m.provider]: pick.value.trim() }, 'Master model saved'); });
     const diff = (m.sites || []).filter((s) => s.own !== s.running);
-    kids.push(h('div', { class: 'meta' }, `${(m.sites || []).length} assistant(s) on ${m.label}` + (diff.length ? ` · ${diff.length} switched from their own provider` : '') + '.'));
+    const d = h('details', { class: 'mmore' }, h('summary', null, 'Model', h('span', { class: 'pill ' + (ready ? 'on' : 'off') }, readyText), h('span', { class: 'meta' }, m.models[m.provider] || 'default')),
+      h('div', { class: 'mrow' }, pick, list), h('div', { class: 'meta' }, `${(m.sites || []).length} on ${m.label}` + (diff.length ? ` · ${diff.length} switched` : '')));
+    d.open = masterOpen; d.addEventListener('toggle', () => { masterOpen = d.open; });
+    kids.push(d);
   }
   return h('section', { class: 'card master' + (m.provider ? ' is-on' : '') }, ...kids);
 }
+let masterOpen = false;
 
 function tiles() {
   const total = state.sites.reduce((n, x) => n + x.stats.requests, 0);
@@ -512,6 +516,7 @@ function tiles() {
     tile(cli && cli.claude.loggedIn ? 'green' : 'orange', login(cli && cli.claude), 'Claude CLI'),
     tile(cli && cli.codex.loggedIn ? 'green' : 'orange', login(cli && cli.codex), 'Codex CLI'),
     tile(cli && cli.antigravity && cli.antigravity.loggedIn ? 'green' : 'orange', login(cli && cli.antigravity), 'Antigravity CLI'),
+    tile(cli && cli.copilot && cli.copilot.loggedIn ? 'green' : 'orange', login(cli && cli.copilot), 'Copilot CLI'),
     tile(keys ? 'teal' : 'orange', `${keys}/2`, 'API keys set'));
 }
 
@@ -542,16 +547,38 @@ function collapsible(id, title, summary, ...children) {
   return d;
 }
 
+/* ---------- timeouts: per model (or per provider), blank = default ---------- */
+let tdraft = null;
+function timeoutsPanel() {
+  const rows = tdraft || Object.entries(state.timeouts || {}).map(([k, v]) => [k, String(v)]);
+  const list = h('datalist', { id: 'tkeys' }, [...PROVIDERS.map(([k]) => k), ...Object.values(models).flat()].map((k) => h('option', { value: k })));
+  const inputs = rows.map(([k, v]) => [h('input', { list: 'tkeys', placeholder: 'Model or provider (e.g. ollama)', value: k }), h('input', { type: 'number', min: 5, max: 600, placeholder: 'sec', value: v, style: 'width:90px' })]);
+  const collect = () => inputs.map(([a, b]) => [a.value.trim(), b.value.trim()]);
+  return collapsible('timeouts', 'Timeouts',
+    h('span', { class: 'sum' }, Object.entries(state.timeouts || {}).map(([k, v]) => h('span', { class: 'pill on' }, `${k} ${v}s`))),
+    h('div', { class: 'sub' }, list,
+      ...inputs.map(([a, b], i) => h('div', { class: 'mrow' }, a, b, h('button', { type: 'button', class: 'danger', onclick: () => { const c = collect(); c.splice(i, 1); tdraft = c; render(); } }, 'Remove'))),
+      h('div', { class: 'actions mt' },
+        h('button', { type: 'button', onclick: () => { tdraft = [...collect(), ['', '']]; render(); } }, 'Add'),
+        h('button', { type: 'button', onclick: () => run(async () => {
+          const out = {};
+          for (const [k, v] of collect()) if (k) out[k] = Number(v);
+          await api('/timeouts', 'PUT', { timeouts: out }); tdraft = null; await refresh();
+        }, 'Timeouts saved') }, 'Save'))));
+}
+
 function loginsTab() {
   const state2 = (i) => !i || !i.version ? 'bad' : i.loggedIn ? 'on' : 'off';
   const keyPill = (p) => h('span', { class: 'pill ' + (state.keys[p].set ? 'on' : 'off') }, p + (state.keys[p].set ? ' ✓' : ' –'));
   return [
     collapsible('cli', 'Subscription logins (CLI)',
-      h('span', { class: 'sum' }, h('span', { class: 'pill ' + state2(cli && cli.claude) }, 'Claude'), h('span', { class: 'pill ' + state2(cli && cli.codex) }, 'Codex'), h('span', { class: 'pill ' + state2(cli && cli.antigravity) }, 'Antigravity')),
+      h('span', { class: 'sum' }, h('span', { class: 'pill ' + state2(cli && cli.claude) }, 'Claude'), h('span', { class: 'pill ' + state2(cli && cli.codex) }, 'Codex'), h('span', { class: 'pill ' + state2(cli && cli.antigravity) }, 'Antigravity'), h('span', { class: 'pill ' + state2(cli && cli.copilot) }, 'Copilot')),
       h('div', { class: 'grid2' },
         cliRow('claude', 'Claude', 'On your Mac run: claude setup-token', 'claudeToken'),
         cliRow('codex', 'ChatGPT (Codex)', 'On your Mac run: codex login, then paste ~/.codex/auth.json', 'codexAuth'),
-        agyRow())),
+        agyRow(),
+        cliRow('copilot', 'GitHub Copilot', 'GitHub fine-grained token with the Copilot Requests permission', 'copilotToken'))),
+    timeoutsPanel(),
     collapsible('keys', 'AI provider keys',
       h('span', { class: 'sum' }, keyPill('anthropic'), keyPill('openai')),
       h('div', { class: 'grid2' }, keyRow('anthropic', 'Anthropic'), keyRow('openai', 'OpenAI'))),

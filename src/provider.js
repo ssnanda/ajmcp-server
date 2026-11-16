@@ -1,6 +1,6 @@
 import { isCliProvider, runCli, CliError } from './cli.js';
 import { buildSystemPrompt } from './knowledge.js';
-import { applyMaster } from './master.js';
+import { applyMaster, timeoutMs } from './master.js';
 
 export class InputError extends Error {
   constructor(message, status = 400) { super(message); this.name = 'InputError'; this.status = status; }
@@ -77,7 +77,7 @@ export async function generateReply(site, messages, config, fetchFn = fetch) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.openaiApiKey}` },
       body: JSON.stringify(body)
-    }, config.providerTimeoutMs);
+    }, timeoutMs(config, provider, model, config.providerTimeoutMs));
     const text = getOpenAIOutput(data);
     if (!text) throw new ProviderError('provider_empty_reply');
     return { text, provider, model, usage: data.usage || null };
@@ -91,7 +91,7 @@ export async function generateReply(site, messages, config, fetchFn = fetch) {
         'Content-Type': 'application/json', 'x-api-key': config.anthropicApiKey,
         'anthropic-version': '2023-06-01'
       }, body: JSON.stringify(body)
-    }, config.providerTimeoutMs);
+    }, timeoutMs(config, provider, model, config.providerTimeoutMs));
     const text = (data?.content || []).filter(x => x.type === 'text').map(x => x.text).join('\n').trim();
     if (!text) throw new ProviderError('provider_empty_reply');
     return { text, provider, model, usage: data.usage || null };
@@ -101,7 +101,7 @@ export async function generateReply(site, messages, config, fetchFn = fetch) {
     const data = await fetchModel(fetchFn, `${config.ollamaUrl}/api/chat`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, messages: history, stream: false })
-    }, config.providerTimeoutMs);
+    }, timeoutMs(config, provider, model, config.providerTimeoutMs));
     const text = typeof data?.message?.content === 'string' ? data.message.content.trim() : '';
     if (!text) throw new ProviderError('provider_empty_reply');
     return { text, provider, model, usage: data.prompt_eval_count || data.eval_count ? { input_tokens: data.prompt_eval_count || 0, output_tokens: data.eval_count || 0 } : null };

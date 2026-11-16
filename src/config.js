@@ -22,7 +22,7 @@ function parseSites(raw, allowEmpty = false) {
       throw new Error(`Site ${id} needs a unique random secret (32+ characters)`);
     }
     if (ids.has(id) || tokens.has(token)) throw new Error('Duplicate site id or token');
-    if (site.provider && !['openai', 'anthropic', 'ollama', 'claude-cli', 'codex-cli', 'antigravity-cli'].includes(site.provider)) throw new Error('Unknown site provider');
+    if (site.provider && !['openai', 'anthropic', 'ollama', 'claude-cli', 'codex-cli', 'antigravity-cli', 'copilot-cli'].includes(site.provider)) throw new Error('Unknown site provider');
     ids.add(id); tokens.add(token);
     return Object.freeze({
       id, token, provider: site.provider || 'openai',
@@ -64,6 +64,7 @@ export function loadConfig(env = process.env, read = readFileSync) {
     openaiApiKey: env.OPENAI_API_KEY || '',
     anthropicApiKey: env.ANTHROPIC_API_KEY || '',
     claudeOauthToken: env.CLAUDE_CODE_OAUTH_TOKEN || '',
+    copilotToken: env.COPILOT_GITHUB_TOKEN || '',
     openaiModel: env.OPENAI_MODEL || '',
     anthropicModel: env.ANTHROPIC_MODEL || '',
     ollamaModel: env.OLLAMA_MODEL || '',
@@ -76,7 +77,9 @@ export function loadConfig(env = process.env, read = readFileSync) {
       tunnelReadyFile: env.OLLAMA_TUNNEL_READY_FILE || '/run/ollama-tunnel/ready'
     },
     // Master switch (claude | codex | antigravity | empty = every site uses its own provider). The admin UI setting wins once saved.
-    master: { provider: ['claude', 'codex', 'antigravity', 'ollama'].includes(String(env.AI_MASTER_PROVIDER || '').toLowerCase()) ? String(env.AI_MASTER_PROVIDER).toLowerCase() : '', models: { claude: '', codex: '', antigravity: '', ollama: '' } },
+    master: { provider: ['claude', 'codex', 'antigravity', 'copilot', 'ollama'].includes(String(env.AI_MASTER_PROVIDER || '').toLowerCase()) ? String(env.AI_MASTER_PROVIDER).toLowerCase() : '', models: { claude: '', codex: '', antigravity: '', copilot: '', ollama: '' } },
+    // Per-call time limits in seconds, keyed by model id or provider (admin UI). Anything not listed keeps the default timeout.
+    timeouts: {},
     allowedHosts: new Set((env.ALLOWED_HOSTS || '').split(',').map(x => x.trim().toLowerCase()).filter(Boolean)),
     allowedOrigins: new Set((env.ALLOWED_ORIGINS || '').split(',').map(x => x.trim()).filter(Boolean)),
     maxRequestBytes: boundedInt(env.MAX_REQUEST_BYTES, 32768, 1024, 1_048_576),

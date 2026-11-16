@@ -3,9 +3,10 @@ FROM node:22-bookworm-slim
 
 ARG CODEX_VERSION=0.167.1
 ARG CLAUDE_VERSION=2.1.322
-# Google Antigravity CLI (agy). Opt in with --build-arg INSTALL_ANTIGRAVITY=true. Google ships it only through an installer script that
+ARG COPILOT_VERSION=1.0.112
+# Google Antigravity CLI (agy). Installed by default; opt out with --build-arg INSTALL_ANTIGRAVITY=false. Google ships it only through an installer script that
 # self-updates, so unlike Codex and Claude it cannot be pinned to a version here.
-ARG INSTALL_ANTIGRAVITY=false
+ARG INSTALL_ANTIGRAVITY=true
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000 \
@@ -26,7 +27,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev --no-audit --no-fund \
     && npm install --global --no-audit --no-fund \
-      "@openai/codex@${CODEX_VERSION}" "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
+      "@openai/codex@${CODEX_VERSION}" "@anthropic-ai/claude-code@${CLAUDE_VERSION}" "@github/copilot@${COPILOT_VERSION}" \
     && npm cache clean --force
 
 COPY src/ ./src/

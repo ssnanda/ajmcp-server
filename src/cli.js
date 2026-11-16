@@ -3,8 +3,9 @@
 import { spawn, execFile } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
+import { timeoutMs } from './master.js';
 
-export const CLI_PROVIDERS = Object.freeze({ 'claude-cli': 'claude', 'codex-cli': 'codex', 'antigravity-cli': 'agy' });
+export const CLI_PROVIDERS = Object.freeze({ 'claude-cli': 'claude', 'codex-cli': 'codex', 'antigravity-cli': 'agy', 'copilot-cli': 'copilot' });
 export const isCliProvider = (provider) => Object.hasOwn(CLI_PROVIDERS, provider);
 
 export class CliError extends Error {
@@ -21,12 +22,14 @@ function cliEnv(config, binary) {
     HOME: cliHome(config), LANG: 'C.UTF-8', TERM: 'dumb', CI: 'true', DISABLE_AUTOUPDATER: '1'
   };
   if (binary === 'claude' && config.claudeOauthToken) env.CLAUDE_CODE_OAUTH_TOKEN = config.claudeOauthToken;
+  if (binary === 'copilot' && config.copilotToken) env.COPILOT_GITHUB_TOKEN = config.copilotToken;
   return env;
 }
 
 export function cliLoggedIn(config, binary) {
   const home = cliHome(config);
   if (binary === 'claude') return Boolean(config.claudeOauthToken) || existsSync(join(home, '.claude', '.credentials.json'));
+  if (binary === 'copilot') return Boolean(config.copilotToken); // signed in with a GitHub token (Copilot Requests permission)
   if (binary === 'agy') return existsSync(join(home, '.gemini', 'antigravity-cli')); // Antigravity keeps its cached sign-in under ~/.gemini/antigravity-cli
   return existsSync(join(home, '.codex', 'auth.json'));
 }
@@ -83,6 +86,12 @@ export function runCli(site, messages, config, { spawnFn = spawn, debug = false 
     if (model) args.push('--model', model);
     prompt = buildPrompt(site.assistant ? system : withRole(system), messages, Boolean(site.assistant));
     args.push('-p', prompt);
+  } else if (binary === 'copilot') {
+    // Headless prompt mode, answer only. Shell and file-write tools are denied and nothing may ask for input.
+    args = ['-s', '--no-ask-user', '--no-auto-update', '--deny-tool=shell', '--deny-tool=write'];
+    if (model) args.push('--model', model);
+    prompt = buildPrompt(site.assistant ? system : withRole(system), messages, Boolean(site.assistant));
+    args.push('-p', prompt);
   } else {
     args = ['exec', '--ephemeral', '--sandbox', 'read-only', '--skip-git-repo-check'];
     if (model) args.push('-m', model);
@@ -94,7 +103,7 @@ export function runCli(site, messages, config, { spawnFn = spawn, debug = false 
     const finish = (fn, value) => { if (settled) return; settled = true; clearTimeout(timer); active -= 1; fn(value); };
     const child = spawnFn(binary, args, { shell: false, cwd: config.agentWorkspace, env: cliEnv(config, binary), stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = ''; let stderr = ''; let exceeded = false; let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, config.agentTimeoutMs);
+    const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs(config, site.provider, model, config.agentTimeoutMs));
     child.stdout?.on('data', (chunk) => { stdout += chunk.toString('utf8'); if (stdout.length > 65536) { exceeded = true; child.kill('SIGKILL'); } });
     child.stderr?.on('data', (chunk) => { if (debug && stderr.length < 4000) stderr += chunk.toString('utf8'); });
     child.once('error', () => finish(reject, new CliError('cli_unavailable', 503)));
@@ -106,7 +115,7 @@ export function runCli(site, messages, config, { spawnFn = spawn, debug = false 
       finish(resolve, { text: stdout.trim(), provider: site.provider, model: model || `${binary} default`, usage: null });
     });
     child.stdin?.on('error', () => { /* process exited early; close handler reports it */ });
-    child.stdin?.end(binary === 'agy' ? undefined : prompt);
+    child.stdin?.end(binary === 'agy' || binary === 'copilot' ? undefined : prompt);
   });
 }
 
@@ -129,6 +138,7 @@ export async function cliModels(config, provider) {
     if (ids.length) modelCache.set(provider, { at: Date.now(), ids });
     return ids;
   }
+  if (provider === 'copilot-cli') return []; // no model-list command: type a model id or leave blank for the default
   if (provider !== 'codex-cli') throw new CliError('unknown_cli', 400);
   const hit = modelCache.get(provider);
   if (hit && Date.now() - hit.at < 600_000) return hit.ids;
@@ -157,12 +167,13 @@ function versionOf(binary) {
 /** Installed versions and login state for the admin screen (versions cached for a minute). */
 export async function cliStatus(config) {
   if (!cache.value || Date.now() - cache.at > 60_000) {
-    const [claude, codex, agy] = await Promise.all([versionOf('claude'), versionOf('codex'), versionOf('agy')]);
-    cache.value = { claude, codex, agy }; cache.at = Date.now();
+    const [claude, codex, agy, copilot] = await Promise.all([versionOf('claude'), versionOf('codex'), versionOf('agy'), versionOf('copilot')]);
+    cache.value = { claude, codex, agy, copilot }; cache.at = Date.now();
   }
   return {
     claude: { version: cache.value.claude, loggedIn: cliLoggedIn(config, 'claude'), tokenSet: Boolean(config.claudeOauthToken) },
     codex: { version: cache.value.codex, loggedIn: cliLoggedIn(config, 'codex') },
-    antigravity: { version: cache.value.agy, loggedIn: cliLoggedIn(config, 'agy') }
+    antigravity: { version: cache.value.agy, loggedIn: cliLoggedIn(config, 'agy') },
+    copilot: { version: cache.value.copilot, loggedIn: cliLoggedIn(config, 'copilot'), tokenSet: Boolean(config.copilotToken) }
   };
 }
