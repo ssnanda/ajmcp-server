@@ -8,6 +8,8 @@ metadata:
   annotations:
     cert-manager.io/cluster-issuer: "AJMCP_ISSUER_PLACEHOLDER"
     route.openshift.io/termination: edge
+    # Slow local models (Ollama) can take minutes; the router's default idle timeout would cut the reply off first.
+    haproxy.router.openshift.io/timeout: 600s
 spec:
   ingressClassName: openshift-default
   tls:

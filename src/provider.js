@@ -1,5 +1,6 @@
 import { isCliProvider, runCli, CliError } from './cli.js';
 import { buildSystemPrompt } from './knowledge.js';
+import { request as httpRequest } from 'node:http';
 import { applyMaster, timeoutMs } from './master.js';
 
 export class InputError extends Error {
@@ -44,6 +45,31 @@ async function fetchModel(fetchFn, url, options, timeoutMs) {
     throw new ProviderError('provider_request_failed');
   }
   try { return await response.json(); } catch { throw new ProviderError('provider_invalid_response'); }
+}
+
+/**
+ * fetch-compatible call for the local Ollama endpoint. Node's built-in fetch gives up after 300 s without response headers
+ * (Ollama sends none until a non-streamed answer is complete), so a longer per-model timeout would never be reached.
+ * node:http has no such limit; the AbortSignal is the only deadline.
+ */
+function ollamaFetch(url, { method = 'GET', headers = {}, body, signal } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(url, { method, headers }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('error', reject);
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode, json: async () => JSON.parse(text) });
+      });
+    });
+    req.on('error', reject);
+    if (signal) {
+      const abort = () => req.destroy(Object.assign(new Error('timeout'), { name: 'TimeoutError' }));
+      if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
+    }
+    req.end(body);
+  });
 }
 
 export async function listOllamaModels(config, fetchFn = fetch) {
@@ -98,7 +124,7 @@ export async function generateReply(site, messages, config, fetchFn = fetch) {
   }
   if (provider === 'ollama') {
     const history = site.systemPrompt ? [{ role: 'system', content: site.systemPrompt }, ...validated] : validated;
-    const data = await fetchModel(fetchFn, `${config.ollamaUrl}/api/chat`, {
+    const data = await fetchModel(fetchFn === fetch ? ollamaFetch : fetchFn, `${config.ollamaUrl}/api/chat`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model, messages: history, stream: false })
     }, timeoutMs(config, provider, model, config.providerTimeoutMs));
