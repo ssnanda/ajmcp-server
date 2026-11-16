@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from '
 import { join } from 'node:path';
 import { hashPassword, verifyPassword } from './password.js';
 import { StoreError, KEY_PROVIDERS } from './store.js';
-import { CliError, cliStatus, cliModels, isCliProvider, runCli, saveCodexAuth } from './cli.js';
+import { CliError, cliStatus, cliModels, isCliProvider, runCli, saveCodexAuth, saveAgyAuth } from './cli.js';
 import { masterOf, applyMaster, MASTER_LABELS } from './master.js';
 import { generateReply, listOllamaModels, ProviderError, InputError } from './provider.js';
 import { APP_VERSION } from './version.js';
@@ -337,6 +337,7 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
         store.setKey('copilot', body.copilotToken);
       }
       if ('codexAuth' in body) saveCodexAuth(config, body.codexAuth);
+      if ('agyAuth' in body) saveAgyAuth(config, body.agyAuth);
       return send(res, 200, await cliStatus(config));
     }
     const cliTest = /^\/admin\/api\/cli\/(claude|codex|antigravity|copilot)\/test$/.exec(path);

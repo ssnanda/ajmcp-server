@@ -408,25 +408,11 @@ function treeNode(site) {
       label, key === 'knowledge' && site.knowledge.length ? h('span', { class: 'count' }, site.knowledge.length) : key === 'tests' && (site.tests || []).length ? h('span', { class: 'count' }, site.tests.length) : null))) : null);
 }
 
-/** Antigravity keeps its own cached sign-in: nothing to paste here, only a status and a test. */
-function agyRow() {
-  const info = cli && cli.antigravity;
-  const status = !info ? h('span', { class: 'pill bad' }, 'unavailable') : !info.version ? h('span', { class: 'pill bad' }, 'not installed')
-    : h('span', { class: 'pill ' + (info.loggedIn ? 'on' : 'off') }, `${info.version} · ${info.loggedIn ? 'logged in' : 'not logged in'}`);
-  return h('div', { class: 'sub' },
-    h('h3', null, 'Google Antigravity (agy)', status),
-    h('div', { class: 'meta' }, 'Sign in once on this server: open a shell in the pod (oc rsh) with HOME set to the data folder and run agy, then complete the Google sign-in. The login is cached and reused.'),
-    h('div', { class: 'actions' }, h('button', { type: 'button', onclick: () => run(async () => {
-      const r = await api('/cli/antigravity/test', 'POST');
-      notice = r.ok ? { kind: 'ok', text: `Antigravity: replied “${r.reply}”` } : { kind: 'err', text: `Antigravity: test failed — ${words(r.error)}${r.detail ? ' — ' + r.detail : ''}` };
-    }) }, 'Test')));
-}
-
 function cliRow(name, label, how, field, build) {
   const info = cli && cli[name];
   const isToken = field === 'claudeToken' || field === 'copilotToken';
   const input = h(isToken ? 'input' : 'textarea', isToken
-    ? { type: 'password', autocomplete: 'off', placeholder: 'Paste token' } : { placeholder: 'Paste auth.json' });
+    ? { type: 'password', autocomplete: 'off', placeholder: 'Paste token' } : { placeholder: field === 'agyAuth' ? 'Paste oauth token file' : 'Paste auth.json' });
   const status = !info ? h('span', { class: 'pill bad' }, 'unavailable')
     : !info.version ? h('span', { class: 'pill bad' }, 'not installed')
     : h('span', { class: 'pill ' + (info.loggedIn ? 'on' : 'off') }, `${info.version} · ${info.loggedIn ? 'logged in' : 'not logged in'}`);
@@ -576,7 +562,7 @@ function loginsTab() {
       h('div', { class: 'grid2' },
         cliRow('claude', 'Claude', 'On your Mac run: claude setup-token', 'claudeToken'),
         cliRow('codex', 'ChatGPT (Codex)', 'On your Mac run: codex login, then paste ~/.codex/auth.json', 'codexAuth'),
-        agyRow(),
+        cliRow('antigravity', 'Google Antigravity (agy)', 'On your Mac run: pbcopy < ~/.gemini/jetski-standalone-oauth-token, then paste', 'agyAuth'),
         cliRow('copilot', 'GitHub Copilot', 'GitHub fine-grained token with the Copilot Requests permission', 'copilotToken'))),
     timeoutsPanel(),
     collapsible('keys', 'AI provider keys',

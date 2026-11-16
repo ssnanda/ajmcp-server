@@ -26,11 +26,13 @@ function cliEnv(config, binary) {
   return env;
 }
 
+const AGY_TOKEN_FILE = 'jetski-standalone-oauth-token';
+
 export function cliLoggedIn(config, binary) {
   const home = cliHome(config);
   if (binary === 'claude') return Boolean(config.claudeOauthToken) || existsSync(join(home, '.claude', '.credentials.json'));
   if (binary === 'copilot') return Boolean(config.copilotToken); // signed in with a GitHub token (Copilot Requests permission)
-  if (binary === 'agy') return existsSync(join(home, '.gemini', 'antigravity-cli')); // Antigravity keeps its cached sign-in under ~/.gemini/antigravity-cli
+  if (binary === 'agy') return existsSync(join(home, '.gemini', AGY_TOKEN_FILE)); // the saved sign-in (a pod has no OS keyring to hold it)
   return existsSync(join(home, '.codex', 'auth.json'));
 }
 
@@ -45,6 +47,20 @@ export function saveCodexAuth(config, raw) {
   const file = join(dir, 'auth.json');
   const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(parsed, null, 2) + '\n', { mode: 0o600 });
+  renameSync(tmp, file);
+}
+
+/** Stores an Antigravity login: the contents of ~/.gemini/jetski-standalone-oauth-token from a Mac where `agy` is signed in. */
+export function saveAgyAuth(config, raw) {
+  if (!config.dataDir) throw new CliError('storage_unavailable', 503);
+  let parsed;
+  try { parsed = JSON.parse(String(raw)); } catch { throw new CliError('invalid_auth_json', 400); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof parsed.token !== 'object' || !parsed.token || String(raw).length > 50_000) throw new CliError('invalid_auth_json', 400);
+  const dir = join(cliHome(config), '.gemini');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const file = join(dir, AGY_TOKEN_FILE);
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(parsed), { mode: 0o600 });
   renameSync(tmp, file);
 }
 
