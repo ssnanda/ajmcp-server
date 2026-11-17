@@ -7,7 +7,7 @@ export class InputError extends Error {
   constructor(message, status = 400) { super(message); this.name = 'InputError'; this.status = status; }
 }
 export class ProviderError extends Error {
-  constructor(code, status = 502) { super(code); this.name = 'ProviderError'; this.code = code; this.status = status; }
+  constructor(code, status = 502, detail = '') { super(code); this.name = 'ProviderError'; this.code = code; this.status = status; this.detail = detail; }
 }
 
 export function validateMessages(messages, config) {
@@ -88,7 +88,7 @@ export async function generateReply(site, messages, config, fetchFn = fetch) {
   if (isCliProvider(provider)) {
     try { return await runCli(site, validated, config); }
     catch (error) {
-      if (error instanceof CliError) throw new ProviderError(error.code, error.status);
+      if (error instanceof CliError) throw new ProviderError(error.code, error.status, error.detail);
       throw error;
     }
   }

@@ -305,7 +305,7 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
           const reply = await generateReply(site, [{ role: 'user', content: custom || 'Reply with the single word OK.' }], config, fetchFn);
           return send(res, 200, { ok: true, model: reply.model, reply: reply.text.slice(0, custom ? 2000 : 80) });
         } catch (error) {
-          if (error instanceof ProviderError || error instanceof InputError) return send(res, 200, { ok: false, error: error.code || error.message });
+          if (error instanceof ProviderError || error instanceof InputError) return send(res, 200, { ok: false, error: error.code || error.message, detail: error.detail || '' });
           throw error;
         }
       }

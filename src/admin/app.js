@@ -355,7 +355,7 @@ function accessPanel(site) {
     h('div', { class: 'actions mt' },
       h('button', { class: 'primary', type: 'button', onclick: () => run(async () => {
         const r = await api('/sites/' + site.id + '/test', 'POST');
-        notice = r.ok ? { kind: 'ok', text: `${site.id}: model replied “${r.reply}” (${r.model})` } : { kind: 'err', text: `${site.id}: test failed — ${words(r.error)}` };
+        notice = r.ok ? { kind: 'ok', text: `${site.id}: model replied “${r.reply}” (${r.model})` } : { kind: 'err', text: `${site.id}: test failed — ${words(r.error)}${r.detail ? ' — ' + r.detail : ''}` };
         await refresh();
       }) }, 'Test'),
       h('button', { type: 'button', onclick: () => run(() => api('/sites/' + site.id, 'PUT', { disabled: !site.disabled }).then(refresh), (site.disabled ? 'Enabled ' : 'Disabled ') + site.id) }, site.disabled ? 'Enable' : 'Disable'),
