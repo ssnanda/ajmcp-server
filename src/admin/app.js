@@ -6,8 +6,11 @@ const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['o
 const MASTER_CHOICES = [['', 'Per assistant'], ['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Antigravity'], ['copilot', 'Copilot'], ['ollama', 'Ollama']];
 const MASTER_PROVIDER = { claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli', copilot: 'copilot-cli', ollama: 'ollama' };
 const isCli = (p) => p.endsWith('-cli');
-const TABS = [['sites', 'Assistants'], ['activity', 'Activity'], ['logins', 'Logins & keys'], ['account', 'Account']];
-let tab = TABS.some(([k]) => '#' + k === location.hash) ? location.hash.slice(1) : 'sites';
+// Views: the dashboard (master switch, timeouts, tiles, assistants, activity rail) plus the Settings-menu pages.
+const VIEWS = ['dashboard', 'providers', 'account'];
+const fromHash = () => { const k = location.hash.slice(1); return k === 'logins' ? 'providers' : VIEWS.includes(k) ? k : 'dashboard'; };
+let view = fromHash();
+function go(v) { view = v; history.replaceState(null, '', v === 'dashboard' ? location.pathname + location.search : '#' + v); render(); }
 let notice = null;           // { kind: 'err'|'ok', text, secret? }
 const models = {};           // provider -> [ids]
 const open = new Set();      // expanded site ids
@@ -476,7 +479,7 @@ function masterBar() {
     const pick = h('input', { list: 'mmodels', placeholder: 'Model (blank = default)', value: m.models[m.provider] || '' });
     const list = h('datalist', { id: 'mmodels' });
     if (models[providerKey]) models[providerKey].forEach((id) => list.append(h('option', { value: id })));
-    else api('/models?provider=' + providerKey).then((r) => { models[providerKey] = r.models || []; if (state && tab) render(); }).catch(() => { models[providerKey] = []; });
+    else api('/models?provider=' + providerKey).then((r) => { models[providerKey] = r.models || []; if (state && view === 'dashboard') render(); }).catch(() => { models[providerKey] = []; });
     // Saves as soon as a model is picked or typed (change fires on selection and on leaving the field).
     pick.addEventListener('change', () => { if (pick.value.trim() !== (m.models[m.provider] || '')) saveMaster(m.provider, { ...m.models, [m.provider]: pick.value.trim() }, 'Master model saved'); });
     const diff = (m.sites || []).filter((s) => s.own !== s.running);
@@ -540,8 +543,9 @@ function timeoutsPanel() {
   const list = h('datalist', { id: 'tkeys' }, [...PROVIDERS.map(([k]) => k), ...Object.values(models).flat()].map((k) => h('option', { value: k })));
   const inputs = rows.map(([k, v]) => [h('input', { list: 'tkeys', placeholder: 'Model or provider (e.g. ollama)', value: k }), h('input', { type: 'number', min: 5, max: 600, placeholder: 'sec', value: v, style: 'width:90px' })]);
   const collect = () => inputs.map(([a, b]) => [a.value.trim(), b.value.trim()]);
+  const set = Object.entries(state.timeouts || {});
   return collapsible('timeouts', 'Timeouts',
-    h('span', { class: 'sum' }, Object.entries(state.timeouts || {}).map(([k, v]) => h('span', { class: 'pill on' }, `${k} ${v}s`))),
+    h('span', { class: 'sum' }, set.length ? set.map(([k, v]) => h('span', { class: 'pill on' }, `${k} ${v}s`)) : h('span', { class: 'meta' }, 'defaults')),
     h('div', { class: 'sub' }, list,
       ...inputs.map(([a, b], i) => h('div', { class: 'mrow' }, a, b, h('button', { type: 'button', class: 'danger', onclick: () => { const c = collect(); c.splice(i, 1); tdraft = c; render(); } }, 'Remove'))),
       h('div', { class: 'actions mt' },
@@ -553,23 +557,47 @@ function timeoutsPanel() {
         }, 'Timeouts saved') }, 'Save'))));
 }
 
-function loginsTab() {
-  const state2 = (i) => !i || !i.version ? 'bad' : i.loggedIn ? 'on' : 'off';
-  const keyPill = (p) => h('span', { class: 'pill ' + (state.keys[p].set ? 'on' : 'off') }, p + (state.keys[p].set ? ' ✓' : ' –'));
-  return [
-    collapsible('cli', 'Subscription logins (CLI)',
-      h('span', { class: 'sum' }, h('span', { class: 'pill ' + state2(cli && cli.claude) }, 'Claude'), h('span', { class: 'pill ' + state2(cli && cli.codex) }, 'Codex'), h('span', { class: 'pill ' + state2(cli && cli.antigravity) }, 'Antigravity'), h('span', { class: 'pill ' + state2(cli && cli.copilot) }, 'Copilot')),
-      h('div', { class: 'grid2' },
-        cliRow('claude', 'Claude', 'On your Mac run: claude setup-token', 'claudeToken'),
-        cliRow('codex', 'ChatGPT (Codex)', 'Best: oc exec -it -n ajmcp deploy/ajmcp-server -c ajmcp -- env HOME=/data/home codex login --device-auth (own login). A pasted ~/.codex/auth.json from your Mac is logged out as soon as your Mac refreshes it.', 'codexAuth'),
-        cliRow('antigravity', 'Google Antigravity (agy)', 'Sign in inside the pod: oc exec -it -n ajmcp deploy/ajmcp-server -c ajmcp -- env HOME=/data/home agy', 'agyAuth'),
-        cliRow('copilot', 'GitHub Copilot', 'GitHub fine-grained token with the Copilot Requests permission', 'copilotToken'))),
-    timeoutsPanel(),
-    collapsible('keys', 'AI provider keys',
-      h('span', { class: 'sum' }, keyPill('anthropic'), keyPill('openai')),
-      h('div', { class: 'grid2' }, keyRow('anthropic', 'Anthropic'), keyRow('openai', 'OpenAI'))),
-    ollamaPanel()
-  ];
+/* ---------- AI Providers: one entry per vendor; its subscription login, API key or connection on the right ---------- */
+const VENDORS = [['openai', 'ChatGPT', 'OpenAI'], ['anthropic', 'Claude', 'Anthropic'], ['google', 'Google', 'Antigravity'], ['ollama', 'Ollama', 'Self-hosted'], ['copilot', 'GitHub Copilot', 'GitHub']];
+let vendor = 'openai';
+const cliTone = (i) => !i || !i.version ? 'bad' : i.loggedIn ? 'on' : 'off';
+
+function vendorPills(key) {
+  const sub = (name, label) => { const i = cli && cli[name]; return h('span', { class: 'pill ' + cliTone(i) }, label + (i && i.loggedIn ? ' ✓' : ' –')); };
+  const apiKey = (p) => h('span', { class: 'pill ' + (state.keys[p].set ? 'on' : 'off') }, 'API key' + (state.keys[p].set ? ' ✓' : ' –'));
+  if (key === 'openai') return [sub('codex', 'Subscription'), apiKey('openai')];
+  if (key === 'anthropic') return [sub('claude', 'Subscription'), apiKey('anthropic')];
+  if (key === 'google') return [sub('antigravity', 'Subscription')];
+  if (key === 'copilot') return [sub('copilot', 'Token')];
+  const o = state.ollama || {};
+  return [h('span', { class: 'pill ' + (o.tunnelConnected ? 'on' : 'off') }, o.tunnelConnected ? 'Connected' : 'Disconnected')];
+}
+const vendorReady = (key) => vendorPills(key).some((p) => p.classList.contains('on'));
+
+function vendorBody(key) {
+  if (key === 'openai') return [h('div', { class: 'grid2' },
+    cliRow('codex', 'ChatGPT subscription (Codex CLI)', 'Best: oc exec -it -n ajmcp deploy/ajmcp-server -c ajmcp -- env HOME=/data/home codex login --device-auth (own login). A pasted ~/.codex/auth.json from your Mac is logged out as soon as your Mac refreshes it.', 'codexAuth'),
+    keyRow('openai', 'OpenAI API'))];
+  if (key === 'anthropic') return [h('div', { class: 'grid2' },
+    cliRow('claude', 'Claude subscription (CLI)', 'On your Mac run: claude setup-token', 'claudeToken'),
+    keyRow('anthropic', 'Anthropic API'))];
+  if (key === 'google') return [h('div', { class: 'grid2' },
+    cliRow('antigravity', 'Google Antigravity (agy)', 'Sign in inside the pod: oc exec -it -n ajmcp deploy/ajmcp-server -c ajmcp -- env HOME=/data/home agy', 'agyAuth'))];
+  if (key === 'copilot') return [h('div', { class: 'grid2' },
+    cliRow('copilot', 'GitHub Copilot', 'GitHub fine-grained token with the Copilot Requests permission', 'copilotToken'))];
+  return ollamaPanel();
+}
+
+function providersView() {
+  if (!VENDORS.some(([k]) => k === vendor)) vendor = 'openai';
+  const [, name, by] = VENDORS.find(([k]) => k === vendor);
+  const list = h('nav', { class: 'tree' }, VENDORS.map(([key, label, sub]) =>
+    h('button', { type: 'button', class: 'tparent' + (key === vendor ? ' on' : ''), onclick: () => { vendor = key; render(); } },
+      h('span', { class: 'dot ' + (vendorReady(key) ? 'ok' : 'no') }),
+      h('span', { class: 'tname' }, label, h('span', { class: 'meta vsub' }, sub)))));
+  return [h('div', { class: 'split' }, list, h('section', { class: 'card panel' },
+    h('h2', null, h('span', { class: 'grow' }, `${name} · ${by}`), ...vendorPills(vendor)),
+    ...vendorBody(vendor)))];
 }
 
 function ollamaPanel() {
@@ -584,52 +612,52 @@ function ollamaPanel() {
   const keyText = h('textarea', { rows: 5, placeholder: 'Or paste the complete private key, including BEGIN/END lines' });
   const hostsText = h('textarea', { rows: 4, placeholder: 'Or paste a known_hosts entry' });
   const fingerprint = h('input', { placeholder: 'Or paste SHA256:… to create known_hosts automatically' });
-  const connection = collapsible('ollama', 'Ollama connection',
-    h('span', { class: 'sum' }, status(o.tunnelConnected, 'SSH connected', 'SSH disconnected')),
-    h('div', { class: 'sub ollama-connection' }, h('h3', null, 'SSH tunnel'),
-        h('div', { class: 'row' }, field('Host / IP', host), field('User', user), field('Port', port)),
-        h('div', { class: 'row' }, field('Upload private key', keyFile), field('Upload known_hosts', hostsFile)),
-        h('div', { class: 'row' }, field('Paste private key', keyText), field('Paste known_hosts', hostsText)),
-        field('Verified ED25519 fingerprint (automatic known_hosts)', fingerprint),
-        h('details', { class: 'inline-help mt' },
-          h('summary', null, 'How to get the fingerprint'),
-          h('div', { class: 'meta mt' }, 'Run this on the Ubuntu server where Ollama is installed:'),
-          h('code', { class: 'command' }, 'sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub'),
-          h('div', { class: 'meta mt' }, 'Copy only the value beginning with SHA256: and paste it above. AJMCP fetches the public host key and accepts it only if the fingerprints match.')),
-        h('div', { class: 'facts' },
-          field('Private key Secret', status(o.keyConfigured, 'mounted', 'missing')),
-          field('known_hosts Secret', status(o.knownHostsConfigured, 'mounted', 'missing'))),
-        h('div', { class: 'actions mt' }, h('button', { class: 'primary', type: 'button', onclick: () => run(async () => {
-          const privateKey = keyFile.files[0] ? await keyFile.files[0].text() : keyText.value.trim();
-          const knownHosts = hostsFile.files[0] ? await hostsFile.files[0].text() : hostsText.value.trim();
-          if (!host.value.trim() || !user.value.trim() || !privateKey) throw new Error('host, user, and private key are required');
-          if (!knownHosts && !fingerprint.value.trim()) throw new Error('upload/paste known_hosts or enter the verified fingerprint');
-          const result = await api('/ollama', 'PUT', {
-            host: host.value.trim(), user: user.value.trim(), port: Number(port.value),
-            privateKey, knownHosts, fingerprint: fingerprint.value.trim()
-          });
-          notice = { kind: 'ok', text: result.restarting ? 'SSH Secret saved. AJMCP is restarting; refresh in about 30 seconds.' : 'SSH Secret saved.' };
-        }) }, 'Save configuration'),
-        h('button', { type: 'button', disabled: !configured || null, onclick: () => run(async () => {
-          const r = await api('/ollama/test', 'POST');
-          models.ollama = r.models || [];
-          notice = r.ok ? { kind: 'ok', text: `Connected to Ollama · ${models.ollama.length} model(s)` } : { kind: 'err', text: `Connection failed — ${words(r.error)}` };
-          await refresh();
-        }) }, 'Connect')),
-      h('div', { class: 'meta mt' }, 'Connection settings are stored in OpenShift Secrets. Saving changes triggers a deployment rollout.')));
+  const connection = h('div', { class: 'sub' },
+    h('h3', null, 'SSH tunnel', status(o.tunnelConnected, 'SSH connected', 'SSH disconnected')),
+    h('div', { class: 'row' }, field('Host / IP', host), field('User', user), field('Port', port)),
+    h('div', { class: 'row' }, field('Upload private key', keyFile), field('Upload known_hosts', hostsFile)),
+    h('div', { class: 'row' }, field('Paste private key', keyText), field('Paste known_hosts', hostsText)),
+    field('Verified ED25519 fingerprint (automatic known_hosts)', fingerprint),
+    h('details', { class: 'inline-help mt' },
+      h('summary', null, 'How to get the fingerprint'),
+      h('div', { class: 'meta mt' }, 'Run this on the Ubuntu server where Ollama is installed:'),
+      h('code', { class: 'command' }, 'sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub'),
+      h('div', { class: 'meta mt' }, 'Copy only the value beginning with SHA256: and paste it above. AJMCP fetches the public host key and accepts it only if the fingerprints match.')),
+    h('div', { class: 'facts mt' },
+      field('Private key Secret', status(o.keyConfigured, 'mounted', 'missing')),
+      field('known_hosts Secret', status(o.knownHostsConfigured, 'mounted', 'missing'))),
+    h('div', { class: 'actions mt' }, h('button', { class: 'primary', type: 'button', onclick: () => run(async () => {
+      const privateKey = keyFile.files[0] ? await keyFile.files[0].text() : keyText.value.trim();
+      const knownHosts = hostsFile.files[0] ? await hostsFile.files[0].text() : hostsText.value.trim();
+      if (!host.value.trim() || !user.value.trim() || !privateKey) throw new Error('host, user, and private key are required');
+      if (!knownHosts && !fingerprint.value.trim()) throw new Error('upload/paste known_hosts or enter the verified fingerprint');
+      const result = await api('/ollama', 'PUT', {
+        host: host.value.trim(), user: user.value.trim(), port: Number(port.value),
+        privateKey, knownHosts, fingerprint: fingerprint.value.trim()
+      });
+      notice = { kind: 'ok', text: result.restarting ? 'SSH Secret saved. AJMCP is restarting; refresh in about 30 seconds.' : 'SSH Secret saved.' };
+    }) }, 'Save configuration'),
+    h('button', { type: 'button', disabled: !configured || null, onclick: () => run(async () => {
+      const r = await api('/ollama/test', 'POST');
+      models.ollama = r.models || [];
+      notice = r.ok ? { kind: 'ok', text: `Connected to Ollama · ${models.ollama.length} model(s)` } : { kind: 'err', text: `Connection failed — ${words(r.error)}` };
+      await refresh();
+    }) }, 'Connect')),
+    h('div', { class: 'meta mt' }, 'Stored in OpenShift Secrets; saving triggers a rollout.'));
   const available = models.ollama || [];
-  const modelPanel = collapsible('ollama-models', 'Ollama models',
-    h('span', { class: 'sum' }, status(available.length, available.length + ' available', 'not loaded')),
-    h('div', { class: 'sub' },
-      h('h3', null, 'Available models'),
-      available.length ? h('div', { class: 'model-list' }, available.map((id) => h('code', { class: 'model-chip' }, id))) : h('div', { class: 'empty' }, 'Connect to Ollama to discover models.'),
-      h('div', { class: 'meta mt' }, 'Choose a model for each assistant under Assistants, or choose Ollama and its model in the Master switch.'),
-      h('div', { class: 'actions mt' }, h('button', { type: 'button', onclick: () => { tab = 'sites'; history.replaceState(null, '', '#sites'); render(); } }, 'Choose per assistant'))));
-  return h('div', { class: 'ollama-sections' }, connection, modelPanel);
+  const modelPanel = h('div', { class: 'sub' },
+    h('h3', null, 'Models', status(available.length, available.length + ' available', 'not loaded')),
+    available.length ? h('div', { class: 'model-list' }, available.map((id) => h('code', { class: 'model-chip' }, id))) : h('div', { class: 'empty' }, 'Connect to discover models.'),
+    h('div', { class: 'actions mt' }, h('button', { type: 'button', onclick: () => go('dashboard') }, 'Choose per assistant')));
+  return [h('div', { class: 'stack' }, connection, modelPanel)];
 }
 
-/* ---------- Activity: did the request reach the server, and what happened ---------- */
-const activity = { entries: [], since: null, problems: false, auto: true, loaded: false, timer: null, error: '' };
+/* ---------- Activity rail: did the request reach the server, and what happened ----------
+   Lives on the right of the dashboard. Compact (time / assistant / status / took) until hovered or pinned,
+   then it widens over the page and shows every column, filters and conversations. Auto-refresh repaints
+   only the rail, so typing in an assistant panel is never interrupted. */
+const activity = { entries: [], since: null, problems: false, auto: true, loaded: false, timer: null, error: '', pinned: false };
+let railEl = null;
 
 async function loadActivity() {
   try {
@@ -637,13 +665,13 @@ async function loadActivity() {
     activity.entries = d.entries || []; activity.since = d.since; activity.error = '';
   } catch (e) { if (e.message !== 'signed out') activity.error = e.message; }
   activity.loaded = true;
-  if (tab === 'activity' && state) render();
+  if (view === 'dashboard' && state) paintRail();
 }
 
 function ensureActivityTimer() {
   if (activity.timer) return;
   activity.timer = setInterval(() => {
-    if (tab !== 'activity' || !state) { clearInterval(activity.timer); activity.timer = null; return; }
+    if (view !== 'dashboard' || !state) { clearInterval(activity.timer); activity.timer = null; return; }
     if (activity.auto) loadActivity();
   }, 5000);
 }
@@ -652,6 +680,7 @@ const ROUTE_NAMES = { '/v1/ajcore/reply': 'chat / text reply', '/v1/chat': 'chat
 const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const took = (ms) => (ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
 const openActivity = new Set();
+const isBad = (x) => !x.running && (x.status >= 400 || x.error);
 
 function transcriptView(entry) {
   const messages = entry.transcript || [];
@@ -668,9 +697,22 @@ function transcriptView(entry) {
       : h('div', { class: 'empty' }, entry.error ? `No transcript captured · ${words(entry.error)}` : 'No transcript captured for this request.'));
 }
 
-function activityTab() {
+function activityRail() {
   if (!activity.loaded) loadActivity();
   ensureActivityTimer();
+  railEl = h('aside', { class: 'rail' + (activity.pinned ? ' pinned' : '') });
+  paintRail();
+  return h('div', { class: 'rail-slot' }, railEl);
+}
+
+function paintRail() {
+  if (!railEl) return;
+  const top = railEl.scrollTop;
+  railEl.replaceChildren(...activityContent());
+  railEl.scrollTop = top;
+}
+
+function activityContent() {
   // One row per conversation: requests of the same assistant + session are grouped (newest first), the newest one leads.
   const groups = []; const byKey = new Map();
   for (const e of activity.entries) {
@@ -680,8 +722,8 @@ function activityTab() {
     g.items.push(e);
   }
   const rows = groups.flatMap(({ key, e, items }) => {
-    const bad = !e.running && (e.status >= 400 || e.error);
-    const failed = items.filter((x) => !x.running && (x.status >= 400 || x.error)).length;
+    const bad = isBad(e);
+    const failed = items.filter(isBad).length;
     const modelsUsed = [...new Set(items.map((x) => x.model).filter(Boolean))];
     let withText = items.find((x) => x.transcript);
     // If the client sends only the newest message each time, stitch the turns together oldest first.
@@ -691,54 +733,88 @@ function activityTab() {
     }
     const who = e.assistant && e.assistant !== e.site ? `${e.site} → ${e.assistant}` : (e.site || '—');
     const expanded = openActivity.has(key);
-    const row = h('tr', { class: bad ? 'bad' : '' },
+    const row = h('tr', { class: bad ? 'bad' : '', title: e.error ? words(e.error) : null },
       h('td', null, clock(e.t)),
       h('td', null, who, e.via && e.via !== 'primary' ? h('span', { class: 'meta' }, ' · ' + e.via) : null),
-      h('td', null, ROUTE_NAMES[e.route] || e.route, e.channel ? h('span', { class: 'meta' }, ' · ' + e.channel) : null),
-      h('td', null, modelsUsed.length ? modelsUsed.map((m, k) => [k ? ', ' : '', h('code', null, m)]).flat() : '—', e.provider ? h('span', { class: 'meta' }, ' · ' + e.provider) : null),
-      h('td', null, e.sessionId != null ? '#' + e.sessionId : '—', items.length > 1 ? h('span', { class: 'meta' }, ` · ${items.length} messages`) : (e.chars != null ? h('span', { class: 'meta' }, ` · ${e.chars} chars`) : null)),
+      h('td', { class: 'x' }, ROUTE_NAMES[e.route] || e.route, e.channel ? h('span', { class: 'meta' }, ' · ' + e.channel) : null),
+      h('td', { class: 'x' }, modelsUsed.length ? modelsUsed.map((m, k) => [k ? ', ' : '', h('code', null, m)]).flat() : '—', e.provider ? h('span', { class: 'meta' }, ' · ' + e.provider) : null),
+      h('td', { class: 'x' }, e.sessionId != null ? '#' + e.sessionId : '—', items.length > 1 ? h('span', { class: 'meta' }, ` · ${items.length} messages`) : (e.chars != null ? h('span', { class: 'meta' }, ` · ${e.chars} chars`) : null)),
       h('td', null, h('span', { class: 'pill ' + (e.running ? 'off' : bad ? 'bad' : 'on') }, e.running ? 'running…' : String(e.status))),
       h('td', null, took(e.ms)),
-      h('td', null, e.error ? words(e.error) + (e.host ? ` (${e.host})` : '') : (e.running ? '' : 'ok'), failed && !bad ? h('span', { class: 'meta' }, ` · ${failed} failed earlier`) : null,
-        withText ? h('button', { type: 'button', class: 'audit-toggle', onclick: () => { expanded ? openActivity.delete(key) : openActivity.add(key); render(); } }, expanded ? 'Hide' : 'View conversation') : null));
-    return expanded && withText ? [row, h('tr', { class: 'audit-row' }, h('td', { colspan: 8 }, transcriptView(withText)))] : [row];
+      h('td', { class: 'x' }, e.error ? words(e.error) + (e.host ? ` (${e.host})` : '') : (e.running ? '' : 'ok'), failed && !bad ? h('span', { class: 'meta' }, ` · ${failed} failed earlier`) : null,
+        withText ? h('button', { type: 'button', class: 'audit-toggle', onclick: () => { expanded ? openActivity.delete(key) : openActivity.add(key); paintRail(); } }, expanded ? 'Hide' : 'View conversation') : null));
+    return expanded && withText ? [row, h('tr', { class: 'audit-row x' }, h('td', { colspan: 8 }, transcriptView(withText)))] : [row];
   });
   const last = activity.entries[0];
-  return [h('section', { class: 'card' },
-    h('h2', null, h('span', { class: 'grow' }, 'Recent requests'),
-      activity.since ? h('span', { class: 'meta' }, 'since server start ' + new Date(activity.since).toLocaleString()) : null),
-    h('div', { class: 'actions' },
+  const problems = activity.entries.filter(isBad).length;
+  const cols = [['Time'], ['Assistant'], ['Request', 1], ['Model', 1], ['Session', 1], ['Status'], ['Took'], ['Result', 1]];
+  return [
+    h('h2', null, h('span', { class: 'grow' }, 'Activity'),
+      problems ? h('span', { class: 'pill bad' }, `${problems} failed`) : null,
+      last ? h('span', { class: 'meta' }, clock(last.t)) : null,
+      h('button', { type: 'button', class: 'pin', onclick: () => { activity.pinned = !activity.pinned; railEl.classList.toggle('pinned', activity.pinned); paintRail(); } }, activity.pinned ? 'Unpin' : 'Pin open')),
+    h('div', { class: 'actions x' },
       h('button', { type: 'button', onclick: () => loadActivity() }, 'Refresh'),
       h('button', { type: 'button', class: 'danger', disabled: activity.entries.length ? null : true, onclick: async () => {
         try { await api('/activity', 'DELETE'); activity.entries = []; } catch (e) { if (e.message !== 'signed out') activity.error = e.message; }
-        render();
+        paintRail();
       } }, 'Clear'),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: activity.auto || null, onchange: (e) => { activity.auto = e.target.checked; } }), ' Auto-refresh'),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: activity.problems || null, onchange: (e) => { activity.problems = e.target.checked; loadActivity(); } }), ' Problems only'),
-      h('span', { class: 'meta' }, last ? `Last request ${clock(last.t)}` : '')),
+      activity.since ? h('span', { class: 'meta' }, 'since server start ' + new Date(activity.since).toLocaleString()) : null),
     activity.error ? h('div', { class: 'notice err mt' }, activity.error) : null,
     rows.length
       ? h('div', { class: 'tblwrap mt' }, h('table', { class: 'tbl' },
-          h('thead', null, h('tr', null, ['Time', 'Assistant', 'Request', 'Model', 'Session', 'Status', 'Took', 'Result'].map((c) => h('th', null, c)))),
+          h('thead', null, h('tr', null, cols.map(([c, x]) => h('th', { class: x ? 'x' : null }, c)))),
           h('tbody', null, rows)))
-      : h('div', { class: 'empty mt' }, activity.loaded ? 'No requests yet. If a chat message or text was sent and nothing appears here, it never reached this server.' : 'Loading…'))];
+      : h('div', { class: 'empty mt' }, activity.loaded ? 'No requests yet. If a chat message or text was sent and nothing appears here, it never reached this server.' : 'Loading…')];
 }
 
-function accountTab() {
-  return [h('section', { class: 'card' }, h('h2', null, 'Admin password'), passwordForm())];
+/* ---------- dashboard / account / top bar ---------- */
+function dashboard() {
+  return [h('div', { class: 'dash' },
+    h('div', { class: 'dash-main' },
+      h('div', { class: 'controls' }, masterBar(), timeoutsPanel()),
+      tiles(),
+      ...sitesTab()),
+    activityRail())];
 }
+
+function accountView() {
+  return [h('section', { class: 'card acct' }, h('h2', null, 'Account'),
+    h('div', { class: 'facts' }, field('User', h('code', null, state.user)), field('Version', h('code', null, 'v' + state.version))),
+    h('h3', null, 'Change password'), passwordForm())];
+}
+
+async function signOut() {
+  try { await api('/logout', 'POST'); } catch { /* already out */ }
+  state = null; renderLogin();
+}
+
+// Settings opens on hover (desktop) or click/tap; Account sits at the bottom.
+function topbar() {
+  const menu = h('div', { class: 'menu' });
+  const item = (v, label) => h('button', { type: 'button', role: 'menuitem', class: view === v ? 'on' : null, onclick: () => { menu.classList.remove('open'); go(v); } }, label);
+  menu.append(
+    h('button', { type: 'button', 'aria-haspopup': 'menu', onclick: () => menu.classList.toggle('open') }, '⚙ Settings'),
+    h('div', { class: 'drop' }, h('div', { class: 'drop-in', role: 'menu' },
+      item('dashboard', 'Dashboard'), item('providers', 'AI Providers'), h('hr'), item('account', 'Account'))));
+  return h('header', { class: 'topbar' },
+    h('h1', null, h('a', { href: location.pathname, onclick: (e) => { e.preventDefault(); go('dashboard'); } }, 'AJMCP Admin')),
+    h('span', { class: 'who' }, `v${state.version} · ${state.user}`),
+    menu,
+    h('button', { type: 'button', onclick: signOut }, 'Sign out'));
+}
+document.addEventListener('click', (e) => {
+  document.querySelectorAll('.menu.open').forEach((m) => { if (!m.contains(e.target)) m.classList.remove('open'); });
+});
 
 function render() {
-  const body = { sites: sitesTab, activity: activityTab, logins: loginsTab, account: accountTab }[tab]();
+  const body = view === 'providers' ? providersView() : view === 'account' ? accountView() : dashboard();
   app.replaceChildren(...[
-    h('header', { class: 'topbar' },
-      h('h1', null, 'AJMCP Admin'), h('span', { class: 'who' }, `v${state.version} · ${state.user}`),
-      h('button', { type: 'button', onclick: async () => { try { await api('/logout', 'POST'); } catch { /* already out */ } state = null; renderLogin(); } }, 'Sign out')),
-    masterBar(),
-    tiles(),
+    topbar(),
     notice ? h('div', { class: 'notice ' + notice.kind }, notice.text, notice.secret ? h('div', { class: 'secret' }, notice.secret) : null, notice.secret ? copyButton(notice.secret) : null) : null,
     !state.storage ? h('div', { class: 'notice err' }, 'No persistent storage: changes cannot be saved.') : null,
-    h('nav', { class: 'tabs' }, TABS.map(([key, label]) => h('button', { type: 'button', class: key === tab ? 'on' : '', onclick: () => { tab = key; history.replaceState(null, '', '#' + key); render(); } }, label))),
     ...body
   ].filter(Boolean));
 }
