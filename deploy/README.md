@@ -36,7 +36,7 @@ The script uploads only Containerfile, package.json, tool-versions.json and src/
 
 ## Subscription logins (Claude / ChatGPT)
 
-The image contains the Claude Code and Codex CLIs. In `/admin` > Subscription logins, paste the token from `claude setup-token` and the `~/.codex/auth.json` from `codex login` (both made on your Mac). They are stored on the data volume and survive redeploys. A site then uses them by choosing provider "Claude subscription (CLI)" or "ChatGPT subscription (Codex CLI)"; the WordPress connector needs no other change. Claude runs with no tools. Codex runs as a read-only agent, so prefer Claude for public-facing chat.
+The image contains the Claude Code and Codex CLIs. In `/admin` > Subscription logins, paste the token from `claude setup-token` and a Codex login. For Codex, sign in **inside the pod** so the server has its own login: `oc exec -it -n ajmcp deploy/ajmcp-server -c ajmcp -- env HOME=/data/home codex login --device-auth`. Pasting `~/.codex/auth.json` from your Mac also works, but only until your Mac's Codex refreshes it: ChatGPT refresh tokens are single-use, so the server then fails with `cli_login_expired` (`refresh token was already used`). They are stored on the data volume and survive redeploys. A site then uses them by choosing provider "Claude subscription (CLI)" or "ChatGPT subscription (Codex CLI)"; the WordPress connector needs no other change. Claude runs with no tools. Codex runs as a read-only agent, so prefer Claude for public-facing chat.
 
 ## Remote Ollama over SSH
 

@@ -79,6 +79,19 @@ function buildPrompt(system, messages, raw = false) {
 let active = 0;
 
 /**
+ * Names the common CLI failures so callers see why (the bare `cli_failed` hid an expired login for days).
+ * A Codex auth.json copied from another machine shares that machine's single-use refresh token: whichever
+ * side refreshes first logs the other out ("refresh token was already used"). Fix: `codex login --device-auth`
+ * inside the pod (HOME=<DATA_DIR>/home) so the server has its own login.
+ */
+export function cliFailureCode(stderr) {
+  const t = String(stderr || '');
+  if (/refresh token was already used|token_expired|authentication token is expired|not logged in|please (log|sign) in again|401 unauthorized|invalid[_ ]api[_ ]key|OAuth token has expired/i.test(t)) return 'cli_login_expired';
+  if (/usage limit|rate limit|quota|too many requests|429/i.test(t)) return 'cli_usage_limit';
+  return 'cli_failed';
+}
+
+/**
  * One model call through a CLI. The prompt goes through stdin (no argv size limit); stderr is never
  * returned, only a short tail when `debug` is set (admin test button).
  */
@@ -121,12 +134,13 @@ export function runCli(site, messages, config, { spawnFn = spawn, debug = false 
     let stdout = ''; let stderr = ''; let exceeded = false; let timedOut = false;
     const timer = setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, timeoutMs(config, site.provider, model, config.agentTimeoutMs));
     child.stdout?.on('data', (chunk) => { stdout += chunk.toString('utf8'); if (stdout.length > 65536) { exceeded = true; child.kill('SIGKILL'); } });
-    child.stderr?.on('data', (chunk) => { if (debug && stderr.length < 4000) stderr += chunk.toString('utf8'); });
+    // stderr is kept (bounded) to name known failures; its text is returned only with `debug`.
+    child.stderr?.on('data', (chunk) => { if (stderr.length < 8000) stderr += chunk.toString('utf8'); });
     child.once('error', () => finish(reject, new CliError('cli_unavailable', 503)));
     child.once('close', (code) => {
       if (timedOut) return finish(reject, new CliError('provider_timeout', 504));
       if (exceeded) return finish(reject, new CliError('cli_output_too_large'));
-      if (code !== 0) return finish(reject, new CliError('cli_failed', 502, debug ? stderr.trim().slice(-300) : ''));
+      if (code !== 0) return finish(reject, new CliError(cliFailureCode(stderr), 502, debug ? stderr.trim().slice(-300) : ''));
       if (!stdout.trim()) return finish(reject, new CliError('provider_empty_reply'));
       finish(resolve, { text: stdout.trim(), provider: site.provider, model: model || `${binary} default`, usage: null });
     });

@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { runCli, saveCodexAuth, cliLoggedIn, CliError } from '../src/cli.js';
+import { runCli, saveCodexAuth, cliLoggedIn, CliError, cliFailureCode } from '../src/cli.js';
 
 const dir = mkdtempSync(join(tmpdir(), 'ajmcp-cli-'));
 const config = loadConfig({ DATA_DIR: dir, OPENAI_API_KEY: 'sk-secret-openai-key-123456', ANTHROPIC_API_KEY: 'sk-ant-secret-key-1234567', CLAUDE_CODE_OAUTH_TOKEN: 'oauth-token-abcdefghijklmnopqrstuvwxyz', ADMIN_TOKEN: 'z'.repeat(40) });
@@ -68,4 +68,12 @@ test('codex auth.json is validated and stored privately', () => {
   assert.equal(statSync(file).mode & 0o777, 0o600);
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).tokens.access_token, 'a');
   assert.equal(cliLoggedIn(config, 'codex'), true);
+});
+
+test('known CLI failures get specific codes', () => {
+  assert.equal(cliFailureCode('ERROR: Your access token could not be refreshed because your refresh token was already used.'), 'cli_login_expired');
+  assert.equal(cliFailureCode('401 Unauthorized: Provided authentication token is expired'), 'cli_login_expired');
+  assert.equal(cliFailureCode("You've hit your usage limit"), 'cli_usage_limit');
+  assert.equal(cliFailureCode('segfault'), 'cli_failed');
+  assert.equal(cliFailureCode(''), 'cli_failed');
 });
