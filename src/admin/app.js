@@ -650,6 +650,16 @@ function mountFreebuffTerminal(host) {
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: 13,
       theme: { background: '#111418', foreground: '#e8edf2', cursor: '#65d46e', selectionBackground: '#32526b' } });
     fbTerm.onData(sendFreebuffInput);
+    // Freebuff asks the terminal for its colours (OSC 10 = text, OSC 11 = background) to pick a light or dark palette.
+    // xterm.js does not answer these, so Freebuff assumed a light background and drew dark text. Reply with our theme.
+    const oscColor = (hex) => 'rgb:' + [1, 3, 5].map((i) => hex.slice(i, i + 2).repeat(2)).join('/');
+    const answer = (code, hex) => fbTerm.parser.registerOscHandler(code, (data) => {
+      if (data !== '?') return false;
+      sendFreebuffInput(`\x1b]${code};${oscColor(hex)}\x1b\\`);
+      return true;
+    });
+    answer(10, '#e8edf2');
+    answer(11, '#111418');
   }
   if (!fbTerm.element) fbTerm.open(host);
   else host.append(fbTerm.element);
@@ -906,7 +916,6 @@ function activityContent() {
 
 /* ---------- dashboard / account / top bar ---------- */
 function dashboard() {
-  if (view !== 'dashboard') return [h('div', { class: 'settings-page' }, ...sitesTab())];
   return [h('div', { class: 'dash' },
     h('div', { class: 'dash-main' },
       h('div', { class: 'controls' }, masterBar(), timeoutsPanel()),

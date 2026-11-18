@@ -68,7 +68,7 @@ export class FreebuffTerminal {
     const binary = process.env.FREEBUFF_BINARY || 'freebuff';
     const env = {
       PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin', HOME: home,
-      LANG: 'C.UTF-8', TERM: 'xterm-256color', COLORTERM: 'truecolor', DISABLE_AUTOUPDATER: '1'
+      LANG: 'C.UTF-8', TERM: 'xterm-256color', COLORTERM: 'truecolor', COLORFGBG: '15;0', DISABLE_AUTOUPDATER: '1'
     };
     try {
       this.terminal = pty.spawn(binary, [], {
