@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { identityForBearer, authorizeSite } from './auth.js';
 import { Limiter } from './limits.js';
 import { InputError } from './provider.js';
@@ -64,6 +64,13 @@ function prepareAjcoreChat(body, config) {
   if (!Array.isArray(history) || history.length > config.maxMessages - 1) throw new InputError('invalid_history');
   const messages = [...history, { role: 'user', content: body.message }];
   return { sessionId: body.sessionId, messages };
+}
+
+/** Short stable id for one chat, used only to group Activity rows. Never contains message text. */
+function conversationTag(conversationId, messages) {
+  const first = Array.isArray(messages) ? messages.find((m) => m && m.role === 'user' && typeof m.content === 'string') : null;
+  const seed = conversationId || (first ? first.content : '');
+  return seed ? createHash('sha256').update(String(seed)).digest('hex').slice(0, 8) : undefined;
 }
 
 /** Facts the plugin passes along with a chat message; all optional, all length-limited. */
@@ -173,6 +180,9 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
             const context = chatContext(body, ajcore ? ajcore.sessionId : 0);
             const messages = ajcore ? ajcore.messages : body.messages;
             if (Array.isArray(messages)) note.transcript = messages.map(({ role, content }) => ({ role, content }));
+            // Activity groups one chat into one row. Clients without a sessionId (e.g. aados) resend the full history each turn,
+            // so their conversationId, else a hash of the first user message, stays the same for the whole chat.
+            if (note.sessionId == null) note.conversation = conversationTag(context.conversationId, messages);
             reply = context.conversationKey
               ? await routeChat({ entry: site, convs, key: context.conversationKey, messages, context, config, fetchFn, limiter: leadLimiter, log: (m) => console.info(`[routing] ${site.id} ${m}`) })
               : await runChat({ site, messages, context, config, fetchFn, limiter: leadLimiter });

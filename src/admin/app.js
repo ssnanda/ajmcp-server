@@ -860,7 +860,8 @@ function activityContent() {
   // One row per conversation: requests of the same assistant + session are grouped (newest first), the newest one leads.
   const groups = []; const byKey = new Map();
   for (const e of activity.entries) {
-    const key = e.sessionId != null ? `${e.site}|${e.assistant || ''}|${e.channel || ''}|${e.sessionId}` : e.requestId;
+    const key = e.sessionId != null ? `${e.site}|${e.assistant || ''}|${e.channel || ''}|${e.sessionId}`
+      : e.conversation ? `${e.site}|${e.channel || ''}|c:${e.conversation}` : e.requestId;
     let g = byKey.get(key);
     if (!g) { g = { key, e, items: [] }; byKey.set(key, g); groups.push(g); }
     g.items.push(e);
@@ -882,7 +883,7 @@ function activityContent() {
       h('td', null, who, e.via && e.via !== 'primary' ? h('span', { class: 'meta' }, ' · ' + e.via) : null),
       h('td', { class: 'x' }, ROUTE_NAMES[e.route] || e.route, e.channel ? h('span', { class: 'meta' }, ' · ' + e.channel) : null),
       h('td', { class: 'x' }, modelsUsed.length ? modelsUsed.map((m, k) => [k ? ', ' : '', h('code', null, m)]).flat() : '—', e.provider ? h('span', { class: 'meta' }, ' · ' + e.provider) : null),
-      h('td', { class: 'x' }, e.sessionId != null ? '#' + e.sessionId : '—', items.length > 1 ? h('span', { class: 'meta' }, ` · ${items.length} messages`) : (e.chars != null ? h('span', { class: 'meta' }, ` · ${e.chars} chars`) : null)),
+      h('td', { class: 'x' }, e.sessionId != null ? '#' + e.sessionId : e.conversation ? h('code', { title: 'Chat id (no session sent by the client)' }, e.conversation) : '—', items.length > 1 ? h('span', { class: 'meta' }, ` · ${items.length} messages`) : (e.chars != null ? h('span', { class: 'meta' }, ` · ${e.chars} chars`) : null)),
       h('td', null, h('span', { class: 'pill ' + (e.running ? 'off' : bad ? 'bad' : 'on') }, e.running ? 'running…' : String(e.status))),
       h('td', null, took(e.ms)),
       h('td', { class: 'x' }, e.error ? words(e.error) + (e.host ? ` (${e.host})` : '') : (e.running ? '' : 'ok'), failed && !bad ? h('span', { class: 'meta' }, ` · ${failed} failed earlier`) : null,
