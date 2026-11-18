@@ -1,6 +1,6 @@
 {
   "name": "ajmcp-server",
-  "version": "0.1.44",
+  "version": "0.1.45",
   "private": true,
   "type": "module",
   "description": "Multi-tenant AI gateway and MCP server for AJ WordPress sites",
@@ -13,6 +13,7 @@
     "test": "node --test",
     "check": "node --check src/config.js && node --check src/auth.js && node --check src/provider.js && node --check src/server.js && node --check src/agents.js && node --check src/mcp.js && node --check src/index.js && node --check src/admin.js && node --check src/openshift.js && node --check src/ssh.js && node --check src/store.js && node --check src/cli.js && node --check src/freebuff-terminal.js && node --check src/knowledge.js && node --check src/assistant.js && node --check src/leads.js && node --check src/chat.js && node --check src/routing.js && node --check src/siteapi.js && node --check src/password.js && node --check src/admin/app.js && node --check src/version.js && node --check src/master.js",
     "tools:versions": "node scripts/versions.mjs",
+    "tools:refresh": "node scripts/refresh-tool-versions.mjs",
     "tools:update": "node scripts/update-tool-version.mjs"
   },
   "dependencies": {

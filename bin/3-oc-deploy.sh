@@ -10,11 +10,13 @@ cd "$ROOT"
 usage() {
   cat <<'USAGE'
 AJMCP OpenShift deployment:
-  ./bin/3-oc-deploy.sh [version] [--skip-bump] [--sync-secrets] [--sync-ollama-ssh]
+  ./bin/3-oc-deploy.sh [version] [--skip-bump] [--keep-tool-versions] [--sync-secrets] [--sync-ollama-ssh]
 
-Defaults: package.json version, interactive bump when Git dirty, keep existing
-OpenShift secrets, build in cluster, deploy an immutable image digest.
+Defaults: check npm for newer stable CLI versions, package.json version,
+interactive bump when Git dirty, keep existing OpenShift secrets, build in
+cluster, deploy an immutable image digest.
   --skip-bump     Skip version/commit/push prompt for uncommitted files
+  --keep-tool-versions  Do not check npm or advance CLI version pins
   --sync-secrets  Explicitly overwrite ajmcp-secrets using local private files
   --sync-ollama-ssh  Create/update the separate Ollama SSH Secret from private local files
   --reset-admin   Generate a new admin user + password for the web admin and show them once
@@ -28,12 +30,14 @@ SKIP_BUMP=false
 SYNC_SECRETS=false
 RESET_ADMIN=false
 SYNC_OLLAMA_SSH=false
+KEEP_TOOL_VERSIONS=false
 for arg in "$@"; do
   case "$arg" in
     --skip-bump) SKIP_BUMP=true ;;
     --sync-secrets) SYNC_SECRETS=true ;;
     --reset-admin) RESET_ADMIN=true ;;
     --sync-ollama-ssh) SYNC_OLLAMA_SSH=true ;;
+    --keep-tool-versions) KEEP_TOOL_VERSIONS=true ;;
     --help|-h) usage; exit 0 ;;
     -*) echo "ERROR: Unknown option $arg" >&2; usage; exit 2 ;;
     *)
@@ -95,6 +99,12 @@ for env_file in .env .env.local; do
   if [[ -f "$env_file" ]]; then source "$env_file"; fi
 done
 set +a
+if [[ "$KEEP_TOOL_VERSIONS" == false ]]; then
+  echo "Checking npm for newer stable AI provider CLI versions..."
+  node scripts/refresh-tool-versions.mjs
+else
+  echo "Keeping the CLI versions currently pinned in tool-versions.json."
+fi
 if [[ "$SKIP_BUMP" == false && -z "$VERSION_OVERRIDE" ]]; then
   "$SCRIPT_DIR/2-bump-version.sh" --if-dirty
 fi

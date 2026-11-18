@@ -32,6 +32,9 @@ This installs Codex, Claude Code, GitHub Copilot and Freebuff globally at the **
 
 AI Providers → CLI versions compares each pinned and installed version with npm's latest release. Use **Check now** to bypass its 15-minute cache. To update one CLI, use the GitHub Actions “Update one bundled AI CLI” workflow or run `npm run tools:update -- --tool codex|claude|copilot|freebuff`. This changes only `tool-versions.json`; review it, then rebuild/redeploy to activate. Updates are never run inside a live container.
 
+`./bin/3-oc-deploy.sh` performs that stable-version check automatically before its version-bump prompt, updates only pins that are newer, and then builds with the resolved versions. Use `--keep-tool-versions` for a deliberate pinned rollback or reproducible rebuild without contacting npm.
+Preview what deployment would update with `npm run tools:refresh -- --dry-run`.
+
 ## OpenShift
 
 See [deploy/README.md](deploy/README.md), [deploy/openshift.yaml](deploy/openshift.yaml), and [deploy/secret.example.yaml](deploy/secret.example.yaml). The example runs one replica, TLS edge route, non-root image, read-only filesystem, and separate Secrets. Single-node OpenShift is appropriate for an initial deployment but not HA.

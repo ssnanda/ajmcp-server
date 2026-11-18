@@ -12,10 +12,11 @@ This is the recommended, clone-and-run workflow. It builds the AJMCP + Codex + C
 
 ## Regular deployments
 
-- `./bin/3-oc-deploy.sh`: on a dirty Git checkout, offer patch/minor/major/custom version bump, commit and optional GitHub push before building/deploying.
+- `./bin/3-oc-deploy.sh`: check npm and advance any older Codex, Claude, Copilot and Freebuff pins, then on a dirty Git checkout offer a patch/minor/major/custom version bump, commit and optional GitHub push before building/deploying.
 - `./bin/2-bump-version.sh`: version and push independently.
 - `./bin/1-pull-latest.sh`: pull changes made directly on GitHub (e.g. by ChatGPT); `--dry-run` previews, `-f` resets to GitHub.
 - `./bin/3-oc-deploy.sh --skip-bump`: deploy working tree without Git interaction.
+- `./bin/3-oc-deploy.sh --keep-tool-versions`: deliberately deploy the existing pins without contacting npm.
 - `./bin/3-oc-deploy.sh 0.1.2`: tag the image explicitly (server version still comes from package.json; prefer a real bump).
 - `./bin/3-oc-deploy.sh --sync-secrets`: **explicitly overwrite** the protected Secret from local .env.local and sites.json; normally the existing Secret is preserved.
 - `./bin/3-oc-deploy.sh --sync-ollama-ssh`: create/update only the separate Ollama SSH Secret and roll out the tunnel sidecar; ordinary deploys preserve it.
