@@ -35,6 +35,7 @@ RUN if [ "$INSTALL_ANTIGRAVITY" = "true" ]; then \
 
 WORKDIR /app
 COPY package.json ./
+COPY tool-versions.json ./
 COPY --from=app-deps /app/node_modules ./node_modules
 RUN npm install --global --no-audit --no-fund \
       "@openai/codex@${CODEX_VERSION}" "@anthropic-ai/claude-code@${CLAUDE_VERSION}" "@github/copilot@${COPILOT_VERSION}" \

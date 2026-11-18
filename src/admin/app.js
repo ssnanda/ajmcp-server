@@ -3,6 +3,7 @@ const app = document.getElementById('app');
 let state = null;
 let cli = null;             // installed CLI versions + login state
 let freebuff = null;        // interactive-only CLI status
+let toolVersions = null;    // pinned / installed / npm latest
 const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['ollama', 'Remote Ollama'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)'], ['antigravity-cli', 'Google Antigravity (CLI)'], ['copilot-cli', 'GitHub Copilot (CLI)']];
 const MASTER_CHOICES = [['', 'Per assistant'], ['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Antigravity'], ['copilot', 'Copilot'], ['ollama', 'Ollama']];
 const MASTER_PROVIDER = { claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli', copilot: 'copilot-cli', ollama: 'ollama' };
@@ -57,8 +58,8 @@ async function refresh() {
   try { freebuff = await api('/freebuff'); } catch { freebuff = null; }
 }
 
-function copyButton(text) {
-  const b = h('button', { type: 'button' }, 'Copy');
+function copyButton(text, label = 'Copy') {
+  const b = h('button', { type: 'button' }, label);
   b.addEventListener('click', async () => { try { await navigator.clipboard.writeText(text); b.textContent = 'Copied'; } catch { b.textContent = 'Select & copy'; } });
   return b;
 }
@@ -687,13 +688,46 @@ function freebuffPanel() {
 
 function providersView() {
   if (!VENDORS.some(([k]) => k === vendor)) vendor = 'openai';
+  if (!toolVersions) {
+    toolVersions = { loading: true, tools: {} };
+    api('/tool-versions').then((data) => { toolVersions = data; if (view === 'providers') render(); }).catch(() => { toolVersions = { error: true, tools: {} }; if (view === 'providers') render(); });
+  }
   const [, name, by] = VENDORS.find(([k]) => k === vendor);
   const list = h('nav', { class: 'tree vlist' }, VENDORS.map(([key, label, sub]) =>
     h('button', { type: 'button', class: 'tparent' + (key === vendor ? ' on' : ''), onclick: () => { vendor = key; render(); } },
       h('span', { class: 'dot ' + (vendorReady(key) ? 'ok' : 'no') }),
       h('span', { class: 'tname' }, label, h('span', { class: 'meta vsub' }, sub)))));
   return [h('h2', null, h('span', { class: 'grow' }, `AI Providers · ${name} (${by})`), ...vendorPills(vendor)),
+    toolVersionsPanel(),
     h('div', { class: 'vsplit' }, list, h('div', { class: 'vbody' }, ...vendorBody(vendor)))];
+}
+
+function toolVersionsPanel() {
+  const labels = { codex: 'Codex', claude: 'Claude', copilot: 'Copilot', freebuff: 'Freebuff' };
+  const tools = toolVersions && toolVersions.tools || {};
+  const rows = Object.keys(labels).map((key) => {
+    const info = tools[key] || {};
+    const update = `npm run tools:update -- --tool ${key}`;
+    return h('tr', null,
+      h('td', null, labels[key]),
+      h('td', null, h('code', null, info.pinned || '—')),
+      h('td', null, h('code', null, info.installed || '—')),
+      h('td', null, h('code', null, info.latest || (toolVersions && !toolVersions.loading ? 'unavailable' : 'checking…'))),
+      h('td', null, h('span', { class: 'pill ' + (info.updateAvailable ? 'off' : info.latest ? 'on' : '') }, info.updateAvailable ? 'update available' : info.latest ? 'current' : 'unknown')),
+      h('td', null, info.updateAvailable ? copyButton(update, 'Copy update') : null));
+  });
+  const all = 'npm run tools:update -- --tool codex\nnpm run tools:update -- --tool claude\nnpm run tools:update -- --tool copilot\nnpm run tools:update -- --tool freebuff';
+  return h('details', { class: 'card fold versions' },
+    h('summary', null, 'CLI versions', h('span', { class: 'sum' }, Object.values(tools).filter((x) => x.updateAvailable).length ? h('span', { class: 'pill off' }, 'updates available') : h('span', { class: 'pill on' }, toolVersions && !toolVersions.loading ? 'checked' : 'checking…'))),
+    h('div', { class: 'tblwrap mt' }, h('table', { class: 'tbl' },
+      h('thead', null, h('tr', null, ['Provider', 'Pinned', 'Installed', 'npm latest', 'Status', 'Command'].map((x) => h('th', null, x)))), h('tbody', null, ...rows))),
+    h('div', { class: 'actions mt' },
+      h('button', { type: 'button', onclick: async () => {
+        try { toolVersions = await api('/tool-versions?refresh=1'); render(); }
+        catch (error) { notice = { kind: 'err', text: error.message }; render(); }
+      } }, 'Check now'),
+      copyButton(all, 'Copy all update commands')),
+    h('div', { class: 'meta mt' }, 'Run update commands in the repository, review tool-versions.json, then rebuild and deploy. Live pods are never modified in place.'));
 }
 
 function ollamaPanel() {

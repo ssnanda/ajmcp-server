@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual, createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
 import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { hashPassword, verifyPassword } from './password.js';
@@ -21,6 +22,8 @@ const ASSETS = {
   '/admin/xterm.css': [new URL('../node_modules/@xterm/xterm/css/xterm.css', import.meta.url), 'text/css; charset=utf-8']
 };
 const assetCache = new Map();
+const PINNED_TOOLS = JSON.parse(readFileSync(new URL('../tool-versions.json', import.meta.url), 'utf8'));
+const TOOL_PACKAGES = Object.freeze({ codex: '@openai/codex', claude: '@anthropic-ai/claude-code', copilot: '@github/copilot', freebuff: 'freebuff' });
 
 const SESSION_COOKIE = 'ajmcp_session';
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;          // not remembered: until the browser closes, 12h at most
@@ -103,6 +106,28 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
     } catch { /* sessions then last until the next restart; not fatal */ }
   };
   let failures = [];
+  let versionCache = { at: 0, value: null };
+
+  const commandVersion = (binary) => new Promise((resolve) => execFile(binary, ['--version'], {
+    timeout: 5000, maxBuffer: 4096, shell: false,
+    env: { PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin', HOME: config.dataDir ? join(config.dataDir, 'home') : (process.env.HOME || '/tmp'), DISABLE_AUTOUPDATER: '1' }
+  }, (error, stdout) => resolve(error ? '' : String(stdout).trim().slice(0, 120))));
+
+  async function toolVersionView(force = false) {
+    if (!force && versionCache.value && Date.now() - versionCache.at < 15 * 60_000) return versionCache.value;
+    const entries = await Promise.all(Object.entries(TOOL_PACKAGES).map(async ([tool, packageName]) => {
+      const binary = tool === 'claude' ? 'claude' : tool;
+      const [installed, latest] = await Promise.all([
+        commandVersion(binary),
+        fetchFn(`https://registry.npmjs.org/${encodeURIComponent(packageName)}/latest`, { signal: AbortSignal.timeout(8000) })
+          .then((response) => response.ok ? response.json() : null).then((data) => typeof data?.version === 'string' ? data.version : '').catch(() => '')
+      ]);
+      const pinned = String(PINNED_TOOLS[tool] || '');
+      return [tool, { package: packageName, pinned, installed, latest, updateAvailable: Boolean(latest && pinned && latest !== pinned) }];
+    }));
+    versionCache = { at: Date.now(), value: { checkedAt: new Date().toISOString(), tools: Object.fromEntries(entries) } };
+    return versionCache.value;
+  }
 
   const sessionFor = (req) => {
     const raw = readCookie(req, SESSION_COOKIE);
@@ -235,6 +260,10 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
     if (method === 'GET' && path === '/admin/api/state') return send(res, 200, stateView());
     if (method === 'GET' && path === '/admin/api/cli') return send(res, 200, await cliStatus(config));
     if (method === 'GET' && path === '/admin/api/freebuff') return send(res, 200, freebuff.status());
+    if (method === 'GET' && path === '/admin/api/tool-versions') {
+      const force = new URL(req.url || '/', 'http://localhost').searchParams.get('refresh') === '1';
+      return send(res, 200, await toolVersionView(force));
+    }
     if (method === 'GET' && path === '/admin/api/freebuff/events') {
       res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'text/event-stream; charset=utf-8', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
       const write = (message) => sessions.has(session.id) ? res.write(message) : res.end();

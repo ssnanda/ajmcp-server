@@ -30,7 +30,7 @@ Run `CONTAINER_ENGINE=podman ./scripts/build-image.sh your-registry/ajmcp-server
 
 This installs Codex, Claude Code, GitHub Copilot and Freebuff globally at the **exact independent versions** in `tool-versions.json`. CLI installation from npm is supported but Anthropic now recommends the native installer for local environments; versioned npm packages are used here to make reproducible container builds possible. Before production, confirm provider CLI distribution policies and your API-account entitlements.
 
-To update **only Claude**: use the GitHub Actions “Update one bundled AI CLI” workflow with `tool=claude`, or run `npm run tools:update -- --tool claude`. This changes only `tool-versions.json`; rebuild/redeploy to activate. Updates are *not* run inside a live container.
+AI Providers → CLI versions compares each pinned and installed version with npm's latest release. Use **Check now** to bypass its 15-minute cache. To update one CLI, use the GitHub Actions “Update one bundled AI CLI” workflow or run `npm run tools:update -- --tool codex|claude|copilot|freebuff`. This changes only `tool-versions.json`; review it, then rebuild/redeploy to activate. Updates are never run inside a live container.
 
 ## OpenShift
 
