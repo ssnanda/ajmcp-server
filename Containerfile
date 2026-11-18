@@ -33,7 +33,7 @@ RUN if [ "$INSTALL_ANTIGRAVITY" = "true" ]; then \
         --retry 4 --retry-delay 3 --retry-all-errors \
         --connect-timeout 20 --max-time 180 \
         --output /tmp/install-antigravity.sh https://antigravity.google/cli/install.sh \
-      && sh /tmp/install-antigravity.sh \
+      && bash /tmp/install-antigravity.sh \
       && test -x "$HOME/.local/bin/agy" \
       && install -m 0755 "$HOME/.local/bin/agy" /usr/local/bin/agy ; \
     fi
