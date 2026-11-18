@@ -25,13 +25,15 @@ body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 syst
 .topbar button { background: rgba(255, 255, 255, .18); border-color: rgba(255, 255, 255, .35); color: #fff; }
 .topbar button:hover { background: rgba(255, 255, 255, .28); border-color: #fff; }
 
-/* stat tiles */
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
-.tile { background: var(--card); border-radius: 10px; padding: 10px 12px; box-shadow: var(--shadow); border-left: 4px solid var(--tone, var(--blue)); min-width: 0; }
-.tile .n { font-size: 22px; font-weight: 700; color: var(--tone, var(--blue)); line-height: 1.1; overflow-wrap: anywhere; }
-.tile .l { font-size: 12px; color: var(--muted); }
-.tile.blue { --tone: var(--blue); } .tile.green { --tone: var(--green); } .tile.red { --tone: var(--red); }
-.tile.violet { --tone: var(--violet); } .tile.orange { --tone: var(--orange); } .tile.teal { --tone: var(--teal); }
+/* Compact, actionable system status. */
+.quickbar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+.quick { min-height: 30px; padding: 4px 9px; display: inline-flex; align-items: center; gap: 6px; border-radius: 16px; background: var(--card); box-shadow: var(--shadow); font-size: 12px; }
+.quick:hover { background: var(--field); }
+.quick strong { color: var(--accent); font-size: 12px; }
+.quick.warn strong { color: var(--orange); }
+.qdot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.qdot.ok { background: var(--green); } .qdot.no { background: var(--orange); }
+.qlabel { white-space: nowrap; }
 
 /* tabs */
 .tabs { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 14px; padding-bottom: 2px; scrollbar-width: none; }
@@ -112,7 +114,7 @@ details.add > div { padding: 0 12px 12px; }
 @media (max-width: 640px) {
   #app { padding: 0 12px 40px; }
   .topbar { margin: 0 -12px 12px; padding: 12px; }
-  .tiles { grid-template-columns: repeat(2, 1fr); }
+  .quickbar { gap: 5px; }
   .grid2 { grid-template-columns: 1fr; }
   .row { grid-template-columns: 1fr; }
   input, select, textarea { font-size: 16px; }

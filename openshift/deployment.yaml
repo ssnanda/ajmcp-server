@@ -62,7 +62,8 @@ spec:
             - { name: site-config, mountPath: /run/secrets/ajmcp, readOnly: true }
             - { name: data, mountPath: /data }
             - { name: tmp, mountPath: /tmp }
-            - { name: workspace, mountPath: /workspace, readOnly: true }
+            # Bounded scratch space for admin CLI sessions; the container root remains read-only.
+            - { name: workspace, mountPath: /workspace }
             - { name: ollama-ssh, mountPath: /run/secrets/ollama-ssh, readOnly: true }
             - { name: ollama-tunnel, mountPath: /run/ollama-tunnel, readOnly: true }
           securityContext:

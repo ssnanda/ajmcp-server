@@ -132,21 +132,24 @@ for v in "$CODEX_VERSION" "$CLAUDE_VERSION" "$COPILOT_VERSION" "$FREEBUFF_VERSIO
 done
 
 oc whoami >/dev/null 2>&1 || { echo "ERROR: oc login is required." >&2; exit 1; }
-echo ""
-echo "============================================="
-echo "  AJMCP Server — OpenShift deployment"
-echo "============================================="
-echo "  Version:    $VERSION"
-echo "  Codex CLI:  $CODEX_VERSION"
-echo "  Claude CLI: $CLAUDE_VERSION"
-echo "  Copilot CLI: $COPILOT_VERSION"
-echo "  Freebuff CLI: $FREEBUFF_VERSION"
-echo "  Namespace:  $PROJECT"
-echo "  HTTPS URL:  https://$HOSTNAME"
-echo "  Issuer:     $ISSUER"
-echo "  OC user:    $(oc whoami)"
-echo "============================================="
-echo ""
+show_deployment_summary() {
+  echo ""
+  echo "============================================="
+  echo "  AJMCP Server — OpenShift deployment"
+  echo "============================================="
+  echo "  Version:      $VERSION"
+  echo "  Codex CLI:    $CODEX_VERSION"
+  echo "  Claude CLI:   $CLAUDE_VERSION"
+  echo "  Copilot CLI:  $COPILOT_VERSION"
+  echo "  Freebuff CLI: $FREEBUFF_VERSION"
+  echo "  Namespace:    $PROJECT"
+  echo "  HTTPS URL:    https://$HOSTNAME"
+  echo "  Issuer:       $ISSUER"
+  echo "  OC user:      $(oc whoami)"
+  echo "============================================="
+  echo ""
+}
+show_deployment_summary
 
 if ! oc get project "$PROJECT" >/dev/null 2>&1; then
   oc new-project "$PROJECT" --display-name="AJMCP Server" --description="AJMCP AI and MCP gateway"
@@ -317,6 +320,7 @@ echo "URL: https://$HOSTNAME"
 echo "Status: https://$HOSTNAME/health/ready"
 echo "Route: oc get routes -n '$PROJECT'"
 echo "TLS: oc get certificate ajmcp-tls -n '$PROJECT'"
+show_deployment_summary
 show_admin_login
 echo "Ensure DNS points $HOSTNAME to OpenShift router; cert-manager manages renewal."
 if command -v curl >/dev/null 2>&1; then

@@ -8,7 +8,7 @@ const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['o
 const MASTER_CHOICES = [['', 'Per assistant'], ['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Antigravity'], ['copilot', 'Copilot'], ['ollama', 'Ollama']];
 const MASTER_PROVIDER = { claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli', copilot: 'copilot-cli', ollama: 'ollama' };
 const isCli = (p) => p.endsWith('-cli');
-// Views: the dashboard (master switch, timeouts, tiles, assistants, activity rail) plus the Settings-menu pages.
+// Views: the dashboard plus focused Settings pages.
 const VIEWS = ['dashboard', 'providers', 'account'];
 const fromHash = () => { const k = location.hash.slice(1); return k === 'logins' ? 'providers' : VIEWS.includes(k) ? k : 'dashboard'; };
 let view = fromHash();
@@ -432,10 +432,13 @@ function cliRow(name, label, how, field, pasteAlt) {
     ? { type: 'password', autocomplete: 'off', placeholder: 'Paste token' } : { placeholder: field === 'agyAuth' ? 'Paste oauth token file' : 'Paste auth.json' });
   const status = !info ? h('span', { class: 'pill bad' }, 'unavailable')
     : !info.version ? h('span', { class: 'pill bad' }, 'not installed')
-    : h('span', { class: 'pill ' + (info.loggedIn ? 'on' : 'off') }, `${info.version} · ${info.loggedIn ? 'logged in' : 'not logged in'}`);
+    : h('span', { class: 'pill ' + (info.loggedIn ? 'on' : 'off') }, info.version);
+  const instructions = info && info.loggedIn
+    ? h('details', { class: 'inline-help' }, h('summary', null, 'Login instructions'), howView(how))
+    : howView(how);
   return h('div', { class: 'sub' },
     h('h3', null, label, status),
-    howView(how),
+    instructions,
     (() => {
       const save = h('button', { type: 'button', onclick: () => {
         if (!input.value.trim()) { notice = { kind: 'err', text: 'paste the login first' }; render(); return; }
@@ -480,8 +483,6 @@ function passwordForm() {
 }
 
 /* ---------- main ---------- */
-function tile(tone, n, label) { return h('div', { class: 'tile ' + tone }, h('div', { class: 'n' }, n), h('div', { class: 'l' }, label)); }
-
 /* ---------- master switch: every assistant, chat, SMS, lead and agent job through one tool ---------- */
 function masterBar() {
   const m = state.master || { provider: '', models: {}, sites: [] };
@@ -492,8 +493,7 @@ function masterBar() {
   if (m.provider) {
     const providerKey = MASTER_PROVIDER[m.provider];
     const ready = m.provider === 'ollama' ? state.ollama && state.ollama.tunnelConnected : cli && cli[m.provider] && cli[m.provider].loggedIn;
-    const readyText = ready ? (m.provider === 'ollama' ? 'tunnel connected' : 'logged in')
-      : (m.provider === 'ollama' ? 'tunnel disconnected' : 'not logged in');
+    const readyText = ready ? 'Ready' : (m.provider === 'ollama' ? 'Disconnected' : 'Login needed');
     const pick = h('input', { list: 'mmodels', placeholder: 'Model (blank = default)', value: m.models[m.provider] || '' });
     const list = h('datalist', { id: 'mmodels' });
     if (models[providerKey]) models[providerKey].forEach((id) => list.append(h('option', { value: id })));
@@ -510,21 +510,25 @@ function masterBar() {
 }
 let masterOpen = false;
 
-function tiles() {
+function quickStatus() {
   const total = state.sites.reduce((n, x) => n + x.stats.requests, 0);
   const errors = state.sites.reduce((n, x) => n + x.stats.errors, 0);
   const active = state.sites.filter((x) => !x.disabled).length;
   const keys = ['anthropic', 'openai'].filter((p) => state.keys[p].set).length;
-  const login = (i) => !i || !i.version ? 'n/a' : i.loggedIn ? 'Logged in' : 'Not logged in';
-  return h('div', { class: 'tiles' },
-    tile('blue', `${active}/${state.sites.length}`, 'Assistants active'),
-    tile('violet', total, 'Requests since start'),
-    tile(errors ? 'red' : 'green', errors, 'Errors'),
-    tile(cli && cli.claude.loggedIn ? 'green' : 'orange', login(cli && cli.claude), 'Claude CLI'),
-    tile(cli && cli.codex.loggedIn ? 'green' : 'orange', login(cli && cli.codex), 'Codex CLI'),
-    tile(cli && cli.antigravity && cli.antigravity.loggedIn ? 'green' : 'orange', login(cli && cli.antigravity), 'Antigravity CLI'),
-    tile(cli && cli.copilot && cli.copilot.loggedIn ? 'green' : 'orange', login(cli && cli.copilot), 'Copilot CLI'),
-    tile(keys ? 'teal' : 'orange', `${keys}/2`, 'API keys set'));
+  const button = (label, value, ready, action, title) => h('button', { type: 'button', class: 'quick' + (ready === false ? ' warn' : ''), onclick: action, title },
+    ready == null ? null : h('span', { class: 'qdot ' + (ready ? 'ok' : 'no') }),
+    h('span', { class: 'qlabel' }, label), value == null ? null : h('strong', null, value));
+  const provider = (label, key, info) => button(label, null, Boolean(info && info.loggedIn), () => { vendor = key; go('providers'); }, info && info.loggedIn ? `${label} ready` : `${label} login needed`);
+  return h('nav', { class: 'quickbar', 'aria-label': 'System status' },
+    button('Assistants', `${active}/${state.sites.length}`, null, () => { sel.add = false; go('dashboard'); }),
+    button('Requests', total, null, () => { activity.pinned = true; activity.problems = false; railEl?.classList.add('pinned'); loadActivity(); }),
+    button('Errors', errors, errors === 0, () => { activity.pinned = true; activity.problems = true; railEl?.classList.add('pinned'); loadActivity(); }),
+    provider('Claude', 'anthropic', cli && cli.claude),
+    provider('Codex', 'openai', cli && cli.codex),
+    provider('Google', 'google', cli && cli.antigravity),
+    provider('Copilot', 'copilot', cli && cli.copilot),
+    provider('Freebuff', 'freebuff', freebuff && { loggedIn: freebuff.loggedIn }),
+    button('API keys', `${keys}/2`, keys === 2, () => { vendor = 'openai'; go('providers'); }));
 }
 
 function sitesTab() {
@@ -586,7 +590,7 @@ function vendorPills(key) {
   if (key === 'openai') return [sub('codex', 'Subscription'), apiKey('openai')];
   if (key === 'anthropic') return [sub('claude', 'Subscription'), apiKey('anthropic')];
   if (key === 'google') return [sub('antigravity', 'Subscription')];
-  if (key === 'freebuff') return [h('span', { class: 'pill ' + (freebuff && freebuff.loggedIn ? 'on' : 'off') }, freebuff && freebuff.loggedIn ? 'Google login ✓' : 'Not logged in')];
+  if (key === 'freebuff') return [h('span', { class: 'pill ' + (freebuff && freebuff.loggedIn ? 'on' : 'off') }, freebuff && freebuff.loggedIn ? 'Ready' : 'Login needed')];
   if (key === 'copilot') return [sub('copilot', 'Token')];
   const o = state.ollama || {};
   return [h('span', { class: 'pill ' + (o.tunnelConnected ? 'on' : 'off') }, o.tunnelConnected ? 'Connected' : 'Disconnected')];
@@ -902,10 +906,11 @@ function activityContent() {
 
 /* ---------- dashboard / account / top bar ---------- */
 function dashboard() {
+  if (view !== 'dashboard') return [h('div', { class: 'settings-page' }, ...sitesTab())];
   return [h('div', { class: 'dash' },
     h('div', { class: 'dash-main' },
       h('div', { class: 'controls' }, masterBar(), timeoutsPanel()),
-      tiles(),
+      quickStatus(),
       ...sitesTab()),
     activityRail())];
 }

@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FreebuffTerminal, freebuffLoggedIn } from '../src/freebuff-terminal.js';
+import { FreebuffError, FreebuffTerminal, freebuffLoggedIn } from '../src/freebuff-terminal.js';
 
 function fakePty() {
   const events = new EventEmitter();
@@ -43,4 +43,12 @@ test('Freebuff terminal bounds dimensions, forwards data, and stops the PTY', as
   terminal.stop('test');
   assert.equal(pty.child.killed, true);
   assert.equal(terminal.status().running, false);
+});
+
+test('Freebuff terminal names an unavailable workspace instead of leaking a filesystem error', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'ajmcp-freebuff-'));
+  const file = join(dataDir, 'not-a-directory');
+  writeFileSync(file, 'x');
+  const terminal = new FreebuffTerminal({ dataDir, agentWorkspace: file });
+  await assert.rejects(terminal.start(), (error) => error instanceof FreebuffError && error.code === 'freebuff_workspace_unavailable' && error.status === 503);
 });

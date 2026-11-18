@@ -11,6 +11,10 @@ const dimensions = (value, fallback, min, max) => {
   return Number.isInteger(n) && n >= min && n <= max ? n : fallback;
 };
 
+export class FreebuffError extends Error {
+  constructor(code, status = 502) { super(code); this.name = 'FreebuffError'; this.code = code; this.status = status; }
+}
+
 export function freebuffLoggedIn(config) {
   const file = join(config.dataDir ? join(config.dataDir, 'home') : (process.env.HOME || '/tmp'), '.config', 'manicode', 'credentials.json');
   try {
@@ -54,11 +58,13 @@ export class FreebuffTerminal {
     if (this.terminal) return this.status();
     const home = this.config.dataDir ? join(this.config.dataDir, 'home') : (process.env.HOME || '/tmp');
     const cwd = join(this.config.agentWorkspace, 'freebuff');
-    mkdirSync(home, { recursive: true, mode: 0o700 });
-    mkdirSync(cwd, { recursive: true, mode: 0o700 });
+    try {
+      mkdirSync(home, { recursive: true, mode: 0o700 });
+      mkdirSync(cwd, { recursive: true, mode: 0o700 });
+    } catch { throw new FreebuffError('freebuff_workspace_unavailable', 503); }
     let pty;
     try { pty = await this.loadPty(); }
-    catch { throw Object.assign(new Error('freebuff_terminal_unavailable'), { status: 503 }); }
+    catch { throw new FreebuffError('freebuff_terminal_unavailable', 503); }
     const binary = process.env.FREEBUFF_BINARY || 'freebuff';
     const env = {
       PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin', HOME: home,
@@ -69,7 +75,7 @@ export class FreebuffTerminal {
         name: 'xterm-256color', cols: dimensions(cols, 120, 40, 300), rows: dimensions(rows, 36, 10, 120),
         cwd, env
       });
-    } catch { throw Object.assign(new Error('freebuff_unavailable'), { status: 503 }); }
+    } catch { throw new FreebuffError('freebuff_unavailable', 503); }
     this.startedAt = this.lastActivity = Date.now();
     this.backlog = '';
     this.reason = '';
@@ -91,14 +97,14 @@ export class FreebuffTerminal {
   }
 
   input(data) {
-    if (!this.terminal) throw Object.assign(new Error('freebuff_not_running'), { status: 409 });
-    if (typeof data !== 'string' || !data || data.length > 8192) throw Object.assign(new Error('invalid_terminal_input'), { status: 400 });
+    if (!this.terminal) throw new FreebuffError('freebuff_not_running', 409);
+    if (typeof data !== 'string' || !data || data.length > 8192) throw new FreebuffError('invalid_terminal_input', 400);
     this.terminal.write(data);
     this.touch();
   }
 
   resize(cols, rows) {
-    if (!this.terminal) throw Object.assign(new Error('freebuff_not_running'), { status: 409 });
+    if (!this.terminal) throw new FreebuffError('freebuff_not_running', 409);
     this.terminal.resize(dimensions(cols, 120, 40, 300), dimensions(rows, 36, 10, 120));
     this.touch();
   }

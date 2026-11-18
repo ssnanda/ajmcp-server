@@ -11,7 +11,7 @@ import { APP_VERSION } from './version.js';
 import { knowledgeChars } from './knowledge.js';
 import { saveOllamaSecret } from './openshift.js';
 import { scanKnownHost } from './ssh.js';
-import { FreebuffTerminal } from './freebuff-terminal.js';
+import { FreebuffError, FreebuffTerminal } from './freebuff-terminal.js';
 
 const asset = (name) => readFileSync(new URL(`./admin/${name}`, import.meta.url));
 const ASSETS = {
@@ -439,6 +439,8 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
       } else if (error instanceof CliError) {
         send(res, error.status || 502, { error: error.code });
       } else if (error instanceof ProviderError) {
+        send(res, error.status || 502, { error: error.code });
+      } else if (error instanceof FreebuffError) {
         send(res, error.status || 502, { error: error.code });
       } else {
         send(res, 500, { error: 'internal_error' });
