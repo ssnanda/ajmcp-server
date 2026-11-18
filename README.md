@@ -28,7 +28,7 @@ The `examples/sites.example.json` deliberately contains nonfunctional placeholde
 
 Run `CONTAINER_ENGINE=podman ./scripts/build-image.sh your-registry/ajmcp-server:0.1.0`. Docker works too with `CONTAINER_ENGINE=docker`.
 
-This installs `@openai/codex` and `@anthropic-ai/claude-code` globally at the **exact independent versions** in `tool-versions.json`. CLI installation from npm is supported but Anthropic now recommends the native installer for local environments; versioned npm packages are used here to make reproducible container builds possible. Before production, confirm provider CLI distribution policies and your API-account entitlements.
+This installs Codex, Claude Code, GitHub Copilot and Freebuff globally at the **exact independent versions** in `tool-versions.json`. CLI installation from npm is supported but Anthropic now recommends the native installer for local environments; versioned npm packages are used here to make reproducible container builds possible. Before production, confirm provider CLI distribution policies and your API-account entitlements.
 
 To update **only Claude**: use the GitHub Actions “Update one bundled AI CLI” workflow with `tool=claude`, or run `npm run tools:update -- --tool claude`. This changes only `tool-versions.json`; rebuild/redeploy to activate. Updates are *not* run inside a live container.
 
@@ -62,6 +62,7 @@ choose **Per assistant** to restore each one's own provider and model at once. A
   documents no flag to turn its tools off, so the sandbox flag and the headless run's denied approvals are the guard.
 - The image includes `agy` by default (Google's installer script, unpinned, self-updating); build with `--build-arg INSTALL_ANTIGRAVITY=false` to leave it out.
 - GitHub Copilot (`copilot-cli`, npm `@github/copilot`, version in `tool-versions.json`): paste a GitHub fine-grained token with the *Copilot Requests* permission under Settings → AI Providers → GitHub Copilot (or set `COPILOT_GITHUB_TOKEN`). Runs `copilot -s --no-ask-user --deny-tool=shell --deny-tool=write -p <prompt>`.
+- Freebuff (npm `freebuff`, version in `tool-versions.json`) is available only as an admin-only interactive terminal under Settings → AI Providers → Freebuff. Start it there and complete its Google login; credentials persist under `/data/home/.config/manicode`. Freebuff has no supported headless/print interface, so it is intentionally not an automated site-chat provider. The terminal runs in `/workspace/freebuff`, allows one process at a time, and stops after 30 idle minutes or four hours total.
 - Timeouts (dashboard, next to the AI master switch): seconds per model id or provider (e.g. `ollama` = 120). Lookup: model, then provider, then the default (`PROVIDER_TIMEOUT_MS` / `AGENT_TIMEOUT_MS`). Range 5-600.
 
 ## Remote Ollama

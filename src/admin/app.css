@@ -175,6 +175,11 @@ label.check input { width: auto; min-height: 0; }
 .button-link { color: var(--accent); font-weight: 600; text-decoration: none; }
 .button-link:hover { text-decoration: underline; }
 
+/* Admin-only interactive Freebuff PTY. */
+.fbterm { height: 520px; margin-top: 10px; padding: 8px; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: #111418; }
+.fbterm .xterm { height: 100%; }
+.fbterm .xterm-viewport { overflow-y: auto !important; }
+
 .actions .grow { flex: 1; min-width: 160px; }
 .testbox { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--field); overflow-wrap: anywhere; }
 .testbox.ok { border-color: var(--green); }

@@ -116,7 +116,8 @@ REGISTRY="image-registry.openshift-image-registry.svc:5000"
 CODEX_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('tool-versions.json','utf8')).codex")"
 CLAUDE_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('tool-versions.json','utf8')).claude")"
 COPILOT_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('tool-versions.json','utf8')).copilot")"
-for v in "$CODEX_VERSION" "$CLAUDE_VERSION" "$COPILOT_VERSION"; do
+FREEBUFF_VERSION="$(node -p "JSON.parse(require('fs').readFileSync('tool-versions.json','utf8')).freebuff")"
+for v in "$CODEX_VERSION" "$CLAUDE_VERSION" "$COPILOT_VERSION" "$FREEBUFF_VERSION"; do
   [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || { echo "ERROR: Invalid CLI version $v" >&2; exit 1; }
 done
 
@@ -129,6 +130,7 @@ echo "  Version:    $VERSION"
 echo "  Codex CLI:  $CODEX_VERSION"
 echo "  Claude CLI: $CLAUDE_VERSION"
 echo "  Copilot CLI: $COPILOT_VERSION"
+echo "  Freebuff CLI: $FREEBUFF_VERSION"
 echo "  Namespace:  $PROJECT"
 echo "  HTTPS URL:  https://$HOSTNAME"
 echo "  Issuer:     $ISSUER"
@@ -248,7 +250,7 @@ for file in openshift/imagestream.yaml openshift/buildconfig.yaml openshift/conf
   render "$file" | oc apply -n "$PROJECT" -f -
 done
 oc patch buildconfig "$APP" -n "$PROJECT" --type=merge \
-  -p "{\"spec\":{\"strategy\":{\"dockerStrategy\":{\"buildArgs\":[{\"name\":\"CODEX_VERSION\",\"value\":\"$CODEX_VERSION\"},{\"name\":\"CLAUDE_VERSION\",\"value\":\"$CLAUDE_VERSION\"},{\"name\":\"COPILOT_VERSION\",\"value\":\"$COPILOT_VERSION\"}]}}}}" >/dev/null
+  -p "{\"spec\":{\"strategy\":{\"dockerStrategy\":{\"buildArgs\":[{\"name\":\"CODEX_VERSION\",\"value\":\"$CODEX_VERSION\"},{\"name\":\"CLAUDE_VERSION\",\"value\":\"$CLAUDE_VERSION\"},{\"name\":\"COPILOT_VERSION\",\"value\":\"$COPILOT_VERSION\"},{\"name\":\"FREEBUFF_VERSION\",\"value\":\"$FREEBUFF_VERSION\"}]}}}}" >/dev/null
 
 # Whitelist the binary build contents: never upload .env.local, sites.json, .git, secrets.
 mkdir -p "$TMP/build"

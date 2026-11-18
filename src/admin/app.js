@@ -2,6 +2,7 @@
 const app = document.getElementById('app');
 let state = null;
 let cli = null;             // installed CLI versions + login state
+let freebuff = null;        // interactive-only CLI status
 const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['ollama', 'Remote Ollama'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)'], ['antigravity-cli', 'Google Antigravity (CLI)'], ['copilot-cli', 'GitHub Copilot (CLI)']];
 const MASTER_CHOICES = [['', 'Per assistant'], ['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Antigravity'], ['copilot', 'Copilot'], ['ollama', 'Ollama']];
 const MASTER_PROVIDER = { claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli', copilot: 'copilot-cli', ollama: 'ollama' };
@@ -53,6 +54,7 @@ async function run(fn, okText) {
 async function refresh() {
   state = await api('/state');
   try { cli = await api('/cli'); } catch { cli = null; }
+  try { freebuff = await api('/freebuff'); } catch { freebuff = null; }
 }
 
 function copyButton(text) {
@@ -573,7 +575,7 @@ function timeoutsPanel() {
 }
 
 /* ---------- AI Providers: one entry per vendor; its subscription login, API key or connection on the right ---------- */
-const VENDORS = [['openai', 'ChatGPT', 'OpenAI'], ['anthropic', 'Claude', 'Anthropic'], ['google', 'Google', 'Antigravity'], ['ollama', 'Ollama', 'Self-hosted'], ['copilot', 'GitHub Copilot', 'GitHub']];
+const VENDORS = [['openai', 'ChatGPT', 'OpenAI'], ['anthropic', 'Claude', 'Anthropic'], ['google', 'Google', 'Antigravity'], ['freebuff', 'Freebuff', 'Interactive CLI'], ['ollama', 'Ollama', 'Self-hosted'], ['copilot', 'GitHub Copilot', 'GitHub']];
 let vendor = 'openai';
 const cliTone = (i) => !i || !i.version ? 'bad' : i.loggedIn ? 'on' : 'off';
 
@@ -583,6 +585,7 @@ function vendorPills(key) {
   if (key === 'openai') return [sub('codex', 'Subscription'), apiKey('openai')];
   if (key === 'anthropic') return [sub('claude', 'Subscription'), apiKey('anthropic')];
   if (key === 'google') return [sub('antigravity', 'Subscription')];
+  if (key === 'freebuff') return [h('span', { class: 'pill ' + (freebuff && freebuff.loggedIn ? 'on' : 'off') }, freebuff && freebuff.loggedIn ? 'Google login ✓' : 'Not logged in')];
   if (key === 'copilot') return [sub('copilot', 'Token')];
   const o = state.ollama || {};
   return [h('span', { class: 'pill ' + (o.tunnelConnected ? 'on' : 'off') }, o.tunnelConnected ? 'Connected' : 'Disconnected')];
@@ -615,7 +618,71 @@ function vendorBody(key) {
     cliRow('copilot', 'GitHub Copilot', [
       ['On GitHub: Settings → Developer settings → Personal access tokens → Fine-grained tokens → create one with the Copilot Requests permission.'],
       ['Paste it below, click Save login, then Test.']], 'copilotToken'))];
+  if (key === 'freebuff') return [freebuffPanel()];
   return ollamaPanel();
+}
+
+let fbTerm = null;
+let fbEvents = null;
+let fbInput = '';
+let fbInputTimer = null;
+
+function sendFreebuffInput(data) {
+  fbInput += data;
+  if (fbInputTimer) return;
+  fbInputTimer = setTimeout(async () => {
+    const pending = fbInput.slice(0, 8192); fbInput = fbInput.slice(pending.length); fbInputTimer = null;
+    try { await api('/freebuff/input', 'POST', { data: pending }); }
+    catch (error) { notice = { kind: 'err', text: error.message }; render(); }
+    if (fbInput) sendFreebuffInput('');
+  }, 20);
+}
+
+function mountFreebuffTerminal(host) {
+  if (!window.Terminal) { host.textContent = 'Terminal component unavailable.'; return; }
+  if (!fbTerm) {
+    fbTerm = new window.Terminal({ cols: 120, rows: 36, cursorBlink: true, convertEol: false, scrollback: 5000,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: 13,
+      theme: { background: '#111418', foreground: '#e8edf2', cursor: '#65d46e', selectionBackground: '#32526b' } });
+    fbTerm.onData(sendFreebuffInput);
+  }
+  if (!fbTerm.element) fbTerm.open(host);
+  else host.append(fbTerm.element);
+  if (!fbEvents) {
+    fbEvents = new EventSource('/admin/api/freebuff/events');
+    fbEvents.addEventListener('output', (event) => { try { fbTerm.write(JSON.parse(event.data)); } catch { /* malformed event */ } });
+    fbEvents.addEventListener('exit', (event) => {
+      try { const info = JSON.parse(event.data); fbTerm.writeln(`\r\n[Freebuff ${words(info.reason)}]`); } catch { /* malformed event */ }
+      freebuff = { ...(freebuff || {}), running: false };
+    });
+  }
+  fbTerm.focus();
+}
+
+function freebuffPanel() {
+  const installed = freebuff && freebuff.installed;
+  const running = freebuff && freebuff.running;
+  const host = h('div', { class: 'fbterm', role: 'application', 'aria-label': 'Freebuff terminal' });
+  queueMicrotask(() => mountFreebuffTerminal(host));
+  const start = h('button', { class: 'primary', type: 'button', disabled: !installed || running || null, onclick: async () => {
+    try {
+      freebuff = await api('/freebuff/start', 'POST', { cols: 120, rows: 36 });
+      if (fbTerm) { fbTerm.reset(); fbTerm.focus(); }
+      notice = { kind: 'ok', text: 'Freebuff terminal started' }; render();
+    } catch (error) { notice = { kind: 'err', text: error.message }; render(); }
+  } }, running ? 'Running' : 'Start Freebuff');
+  const stop = h('button', { class: 'danger', type: 'button', disabled: !running || null, onclick: async () => {
+    try { await api('/freebuff/stop', 'POST'); freebuff = await api('/freebuff'); render(); }
+    catch (error) { notice = { kind: 'err', text: error.message }; render(); }
+  } }, 'Stop');
+  return h('div', { class: 'stack' },
+    h('div', { class: 'sub' },
+      h('h3', null, 'Freebuff CLI',
+        h('span', { class: 'pill ' + (installed ? 'on' : 'bad') }, installed ? 'installed' : 'not installed'),
+        h('span', { class: 'pill ' + (freebuff && freebuff.loggedIn ? 'on' : 'off') }, freebuff && freebuff.loggedIn ? 'logged in' : 'login required')),
+      h('div', { class: 'actions' }, start, stop),
+      h('div', { class: 'meta mt' }, 'Admin only. Freebuff can run commands and access container files. Sessions stop after 30 idle minutes or four hours total.'),
+      host));
 }
 
 function providersView() {

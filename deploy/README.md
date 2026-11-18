@@ -20,7 +20,7 @@ This is the recommended, clone-and-run workflow. It builds the AJMCP + Codex + C
 - `./bin/3-oc-deploy.sh --sync-secrets`: **explicitly overwrite** the protected Secret from local .env.local and sites.json; normally the existing Secret is preserved.
 - `./bin/3-oc-deploy.sh --sync-ollama-ssh`: create/update only the separate Ollama SSH Secret and roll out the tunnel sidecar; ordinary deploys preserve it.
 
-The version in package.json governs the server; tool-versions.json independently pins the Codex and Claude CLI versions. Both pinned versions are set as OpenShift build arguments. A new binary build produces one combined container image; an immutable image digest ensures reliable Deployment rollback on a failed rollout.
+The version in package.json governs the server; tool-versions.json independently pins the Codex, Claude, Copilot and Freebuff CLI versions. The pinned versions are set as OpenShift build arguments. A new binary build produces one combined container image; an immutable image digest ensures reliable Deployment rollback on a failed rollout.
 
 ## Route and SSL
 

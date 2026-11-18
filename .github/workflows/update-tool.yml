@@ -9,6 +9,8 @@ on:
         options:
           - codex
           - claude
+          - copilot
+          - freebuff
       version:
         description: Version (blank = latest published npm version)
         required: false

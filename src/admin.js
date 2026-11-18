@@ -10,12 +10,15 @@ import { APP_VERSION } from './version.js';
 import { knowledgeChars } from './knowledge.js';
 import { saveOllamaSecret } from './openshift.js';
 import { scanKnownHost } from './ssh.js';
+import { FreebuffTerminal } from './freebuff-terminal.js';
 
 const asset = (name) => readFileSync(new URL(`./admin/${name}`, import.meta.url));
 const ASSETS = {
   '/admin': ['index.html', 'text/html; charset=utf-8'],
   '/admin/app.js': ['app.js', 'text/javascript; charset=utf-8'],
-  '/admin/app.css': ['app.css', 'text/css; charset=utf-8']
+  '/admin/app.css': ['app.css', 'text/css; charset=utf-8'],
+  '/admin/xterm.js': [new URL('../node_modules/@xterm/xterm/lib/xterm.js', import.meta.url), 'text/javascript; charset=utf-8'],
+  '/admin/xterm.css': [new URL('../node_modules/@xterm/xterm/css/xterm.css', import.meta.url), 'text/css; charset=utf-8']
 };
 const assetCache = new Map();
 
@@ -76,6 +79,7 @@ function readCookie(req, name) {
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function createAdmin({ config, store, stats, activity, fetchFn = fetch, readBody }) {
+  const freebuff = new FreebuffTerminal(config);
   // Sessions survive restarts and deploys: they are kept (hashed) in DATA_DIR/sessions.json. Each one is
   // tied to the current admin password, so a password change or --reset-admin signs everything out.
   const sha = (value) => createHash('sha256').update(String(value)).digest('hex');
@@ -230,6 +234,26 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
     }
     if (method === 'GET' && path === '/admin/api/state') return send(res, 200, stateView());
     if (method === 'GET' && path === '/admin/api/cli') return send(res, 200, await cliStatus(config));
+    if (method === 'GET' && path === '/admin/api/freebuff') return send(res, 200, freebuff.status());
+    if (method === 'GET' && path === '/admin/api/freebuff/events') {
+      res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': 'text/event-stream; charset=utf-8', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+      const write = (message) => sessions.has(session.id) ? res.write(message) : res.end();
+      const unsubscribe = freebuff.subscribe(write);
+      const heartbeat = setInterval(() => write(': keepalive\n\n'), 15_000);
+      req.once('close', () => { clearInterval(heartbeat); unsubscribe(); });
+      return;
+    }
+    if (method === 'POST' && path === '/admin/api/freebuff/start') {
+      const body = await readBody(req, 4096);
+      return send(res, 200, await freebuff.start(body));
+    }
+    if (method === 'POST' && path === '/admin/api/freebuff/input') {
+      const body = await readBody(req, 12_000); freebuff.input(body?.data); return send(res, 200, { ok: true });
+    }
+    if (method === 'POST' && path === '/admin/api/freebuff/resize') {
+      const body = await readBody(req, 4096); freebuff.resize(body?.cols, body?.rows); return send(res, 200, { ok: true });
+    }
+    if (method === 'POST' && path === '/admin/api/freebuff/stop') { freebuff.stop(); return send(res, 200, { ok: true }); }
     if (method === 'DELETE' && path === '/admin/api/activity') { if (activity) activity.clear(); return send(res, 200, { ok: true }); }
     if (method === 'GET' && path === '/admin/api/activity') {
       const query = new URL(req.url || '/', 'http://localhost').searchParams;
@@ -373,7 +397,7 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
     try {
       if (req.method === 'GET' && ASSETS[normalized]) {
         const [file, type] = ASSETS[normalized];
-        if (!assetCache.has(file)) assetCache.set(file, asset(file));
+        if (!assetCache.has(file)) assetCache.set(file, file instanceof URL ? readFileSync(file) : asset(file));
         res.writeHead(200, { 'Content-Type': type, ...SECURITY_HEADERS });
         res.end(assetCache.get(file));
         return true;
