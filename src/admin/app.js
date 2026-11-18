@@ -10,7 +10,10 @@ const isCli = (p) => p.endsWith('-cli');
 const VIEWS = ['dashboard', 'providers', 'account'];
 const fromHash = () => { const k = location.hash.slice(1); return k === 'logins' ? 'providers' : VIEWS.includes(k) ? k : 'dashboard'; };
 let view = fromHash();
-function go(v) { view = v; history.replaceState(null, '', v === 'dashboard' ? location.pathname + location.search : '#' + v); render(); }
+function go(v) {
+  view = v; history.replaceState(null, '', v === 'dashboard' ? location.pathname + location.search : '#' + v); render();
+  if (v !== 'dashboard') { const p = document.querySelector('.split .panel'); if (p) p.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+}
 let notice = null;           // { kind: 'err'|'ok', text, secret? }
 const models = {};           // provider -> [ids]
 const open = new Set();      // expanded site ids
@@ -395,23 +398,31 @@ function addPanel() {
 
 /* ---------- left-hand tree ---------- */
 function treeNode(site) {
-  const here = !sel.add && sel.id === site.id;
+  const here = view === 'dashboard' && !sel.add && sel.id === site.id;
   const opened = treeOpen.has(site.id);
   return h('div', { class: 'tnode' },
     h('button', { type: 'button', class: 'tparent' + (here ? ' on' : ''), onclick: () => {
       if (here && opened) treeOpen.delete(site.id); else treeOpen.add(site.id);
       sel = { id: site.id, section: here ? sel.section : 'general', add: false };
-      render();
+      go('dashboard');
     } },
       h('span', { class: 'caret' }, opened ? '▾' : '▸'),
       h('span', { class: 'dot tone-' + site.provider + (site.disabled ? ' off' : '') }),
       h('span', { class: 'tname' }, site.id),
       site.disabled ? h('span', { class: 'pill off' }, 'off') : null),
-    opened ? h('div', { class: 'tkids' }, SECTIONS.map(([key, label]) => h('button', { type: 'button', class: 'tchild' + (here && sel.section === key ? ' on' : ''), onclick: () => { sel = { id: site.id, section: key, add: false }; render(); } },
+    opened ? h('div', { class: 'tkids' }, SECTIONS.map(([key, label]) => h('button', { type: 'button', class: 'tchild' + (here && sel.section === key ? ' on' : ''), onclick: () => { sel = { id: site.id, section: key, add: false }; go('dashboard'); } },
       label, key === 'knowledge' && site.knowledge.length ? h('span', { class: 'count' }, site.knowledge.length) : key === 'tests' && (site.tests || []).length ? h('span', { class: 'count' }, site.tests.length) : null))) : null);
 }
 
-function cliRow(name, label, how, field, build) {
+// how: a hint string, or steps [[text, command?], …]; each command gets a Copy button.
+function howView(how) {
+  if (!Array.isArray(how)) return h('div', { class: 'meta' }, how);
+  return h('ol', { class: 'steps' }, how.map(([text, cmd]) => h('li', null, text,
+    cmd ? h('div', { class: 'cmdrow' }, h('code', { class: 'command' }, cmd), copyButton(cmd)) : null)));
+}
+
+// pasteAlt: put the paste box behind a collapsed fallback (logins that are best done inside the pod).
+function cliRow(name, label, how, field, pasteAlt) {
   const info = cli && cli[name];
   const isToken = field === 'claudeToken' || field === 'copilotToken';
   const input = h(isToken ? 'input' : 'textarea', isToken
@@ -421,13 +432,17 @@ function cliRow(name, label, how, field, build) {
     : h('span', { class: 'pill ' + (info.loggedIn ? 'on' : 'off') }, `${info.version} · ${info.loggedIn ? 'logged in' : 'not logged in'}`);
   return h('div', { class: 'sub' },
     h('h3', null, label, status),
-    h('div', { class: 'meta' }, how),
-    h('div', { class: 'row' }, input),
-    h('div', { class: 'actions' },
-      h('button', { type: 'button', onclick: () => {
+    howView(how),
+    (() => {
+      const save = h('button', { type: 'button', onclick: () => {
         if (!input.value.trim()) { notice = { kind: 'err', text: 'paste the login first' }; render(); return; }
         run(async () => { cli = await api('/cli', 'PUT', { [field]: input.value.trim() }); }, label + ' login saved');
-      } }, 'Save login'),
+      } }, 'Save login');
+      return pasteAlt
+        ? h('details', { class: 'inline-help mt' }, h('summary', null, pasteAlt), h('div', { class: 'row mt' }, input), save)
+        : h('div', null, h('div', { class: 'row mt' }, input), save);
+    })(),
+    h('div', { class: 'actions mt' },
       h('button', { type: 'button', onclick: () => run(async () => {
         const r = await api('/cli/' + name + '/test', 'POST');
         notice = r.ok ? { kind: 'ok', text: `${label}: replied “${r.reply}”` } : { kind: 'err', text: `${label}: test failed — ${words(r.error)}${r.detail ? ' — ' + r.detail : ''}` };
@@ -479,7 +494,7 @@ function masterBar() {
     const pick = h('input', { list: 'mmodels', placeholder: 'Model (blank = default)', value: m.models[m.provider] || '' });
     const list = h('datalist', { id: 'mmodels' });
     if (models[providerKey]) models[providerKey].forEach((id) => list.append(h('option', { value: id })));
-    else api('/models?provider=' + providerKey).then((r) => { models[providerKey] = r.models || []; if (state && view === 'dashboard') render(); }).catch(() => { models[providerKey] = []; });
+    else api('/models?provider=' + providerKey).then((r) => { models[providerKey] = r.models || []; if (state) render(); }).catch(() => { models[providerKey] = []; });
     // Saves as soon as a model is picked or typed (change fires on selection and on leaving the field).
     pick.addEventListener('change', () => { if (pick.value.trim() !== (m.models[m.provider] || '')) saveMaster(m.provider, { ...m.models, [m.provider]: pick.value.trim() }, 'Master model saved'); });
     const diff = (m.sites || []).filter((s) => s.own !== s.running);
@@ -516,15 +531,15 @@ function sitesTab() {
   }
   const site = state.sites.find((x) => x.id === sel.id);
   const tree = h('nav', { class: 'tree' },
-    h('button', { type: 'button', class: 'tadd' + (sel.add ? ' on' : ''), onclick: () => { sel = { id: sel.id, section: sel.section, add: true }; render(); } }, '+ Add assistant'),
+    h('button', { type: 'button', class: 'tadd' + (view === 'dashboard' && sel.add ? ' on' : ''), onclick: () => { sel = { id: sel.id, section: sel.section, add: true }; go('dashboard'); } }, '+ Add assistant'),
     ...state.sites.map(treeNode),
     state.sites.length ? null : h('div', { class: 'empty' }, 'No assistants yet.'));
-  const panel = sel.add ? addPanel()
+  const panel = view === 'providers' ? providersView() : view === 'account' ? accountView() : sel.add ? [h('h2', null, 'Add assistant'), ...addPanel()]
     : [h('h2', null, h('span', { class: 'grow' }, `${site.id} · ${(SECTIONS.find(([k]) => k === sel.section) || [0, ''])[1]}`),
         h('span', { class: 'pill ' + (site.disabled ? 'off' : 'on') }, site.disabled ? 'disabled' : 'active'),
         h('span', { class: 'pill tone-' + site.provider }, providerLabel(site.provider))),
       ...(sel.section === 'knowledge' ? knowledgePanel(site) : sel.section === 'tests' ? testsPanel(site) : sel.section === 'leads' ? leadsPanel(site) : sel.section === 'access' ? accessPanel(site) : generalPanel(site))];
-  return [h('div', { class: 'split' }, tree, h('section', { class: 'card panel' }, ...(sel.add ? [h('h2', null, 'Add assistant'), ...panel] : panel)))];
+  return [h('div', { class: 'split' }, tree, h('section', { class: 'card panel' }, ...panel))];
 }
 
 const openSections = new Set();   // collapsible cards the user has expanded (collapsed by default)
@@ -574,30 +589,44 @@ function vendorPills(key) {
 }
 const vendorReady = (key) => vendorPills(key).some((p) => p.classList.contains('on'));
 
+// Runs a command in the AJMCP pod with the persistent home, so logins survive restarts.
+const POD = 'oc exec -it -n ajmcp deploy/ajmcp-server -c ajmcp -- env HOME=/data/home ';
+
 function vendorBody(key) {
   if (key === 'openai') return [h('div', { class: 'grid2' },
-    cliRow('codex', 'ChatGPT subscription (Codex CLI)', 'Best: oc exec -it -n ajmcp deploy/ajmcp-server -c ajmcp -- env HOME=/data/home codex login --device-auth (own login). A pasted ~/.codex/auth.json from your Mac is logged out as soon as your Mac refreshes it.', 'codexAuth'),
+    cliRow('codex', 'ChatGPT subscription (Codex CLI)', [
+      ['In Terminal on your Mac, log in to OpenShift:', 'oc login'],
+      ['Start the login inside the AJMCP pod:', POD + 'codex login --device-auth'],
+      ['Open the URL it prints, sign in to ChatGPT and enter the code. (If device-code login is disabled, enable it in ChatGPT → Settings → Security.)'],
+      ['Click Test below.']], 'codexAuth', 'Paste ~/.codex/auth.json instead (stops working when your Mac refreshes it)'),
     keyRow('openai', 'OpenAI API'))];
   if (key === 'anthropic') return [h('div', { class: 'grid2' },
-    cliRow('claude', 'Claude subscription (CLI)', 'On your Mac run: claude setup-token', 'claudeToken'),
+    cliRow('claude', 'Claude subscription (CLI)', [
+      ['In Terminal on your Mac, run and sign in:', 'claude setup-token'],
+      ['Paste the token it prints below, click Save login, then Test.']], 'claudeToken'),
     keyRow('anthropic', 'Anthropic API'))];
   if (key === 'google') return [h('div', { class: 'grid2' },
-    cliRow('antigravity', 'Google Antigravity (agy)', 'Sign in inside the pod: oc exec -it -n ajmcp deploy/ajmcp-server -c ajmcp -- env HOME=/data/home agy', 'agyAuth'))];
+    cliRow('antigravity', 'Google Antigravity (agy)', [
+      ['In Terminal on your Mac, log in to OpenShift:', 'oc login'],
+      ['Start the login inside the AJMCP pod:', POD + 'agy'],
+      ['Complete the Google sign-in in the browser and paste the code back into Terminal.'],
+      ['Click Test below.']], 'agyAuth', 'Paste the oauth token file instead (a Mac copy is usually stale)'))];
   if (key === 'copilot') return [h('div', { class: 'grid2' },
-    cliRow('copilot', 'GitHub Copilot', 'GitHub fine-grained token with the Copilot Requests permission', 'copilotToken'))];
+    cliRow('copilot', 'GitHub Copilot', [
+      ['On GitHub: Settings → Developer settings → Personal access tokens → Fine-grained tokens → create one with the Copilot Requests permission.'],
+      ['Paste it below, click Save login, then Test.']], 'copilotToken'))];
   return ollamaPanel();
 }
 
 function providersView() {
   if (!VENDORS.some(([k]) => k === vendor)) vendor = 'openai';
   const [, name, by] = VENDORS.find(([k]) => k === vendor);
-  const list = h('nav', { class: 'tree' }, VENDORS.map(([key, label, sub]) =>
+  const list = h('nav', { class: 'tree vlist' }, VENDORS.map(([key, label, sub]) =>
     h('button', { type: 'button', class: 'tparent' + (key === vendor ? ' on' : ''), onclick: () => { vendor = key; render(); } },
       h('span', { class: 'dot ' + (vendorReady(key) ? 'ok' : 'no') }),
       h('span', { class: 'tname' }, label, h('span', { class: 'meta vsub' }, sub)))));
-  return [h('div', { class: 'split' }, list, h('section', { class: 'card panel' },
-    h('h2', null, h('span', { class: 'grow' }, `${name} · ${by}`), ...vendorPills(vendor)),
-    ...vendorBody(vendor)))];
+  return [h('h2', null, h('span', { class: 'grow' }, `AI Providers · ${name} (${by})`), ...vendorPills(vendor)),
+    h('div', { class: 'vsplit' }, list, h('div', { class: 'vbody' }, ...vendorBody(vendor)))];
 }
 
 function ollamaPanel() {
@@ -665,13 +694,13 @@ async function loadActivity() {
     activity.entries = d.entries || []; activity.since = d.since; activity.error = '';
   } catch (e) { if (e.message !== 'signed out') activity.error = e.message; }
   activity.loaded = true;
-  if (view === 'dashboard' && state) paintRail();
+  if (state) paintRail();
 }
 
 function ensureActivityTimer() {
   if (activity.timer) return;
   activity.timer = setInterval(() => {
-    if (view !== 'dashboard' || !state) { clearInterval(activity.timer); activity.timer = null; return; }
+    if (!state) { clearInterval(activity.timer); activity.timer = null; return; }
     if (activity.auto) loadActivity();
   }, 5000);
 }
@@ -708,7 +737,7 @@ function activityRail() {
 function paintRail() {
   if (!railEl) return;
   const top = railEl.scrollTop;
-  railEl.replaceChildren(...activityContent());
+  railEl.replaceChildren(...activityContent().filter(Boolean));
   railEl.scrollTop = top;
 }
 
@@ -781,9 +810,10 @@ function dashboard() {
 }
 
 function accountView() {
-  return [h('section', { class: 'card acct' }, h('h2', null, 'Account'),
-    h('div', { class: 'facts' }, field('User', h('code', null, state.user)), field('Version', h('code', null, 'v' + state.version))),
-    h('h3', null, 'Change password'), passwordForm())];
+  return [h('h2', null, 'Account'),
+    h('div', { class: 'acct' },
+      h('div', { class: 'facts' }, field('User', h('code', null, state.user)), field('Version', h('code', null, 'v' + state.version))),
+      h('h3', null, 'Change password'), passwordForm())];
 }
 
 async function signOut() {
@@ -800,7 +830,7 @@ function topbar() {
     h('div', { class: 'drop' }, h('div', { class: 'drop-in', role: 'menu' },
       item('dashboard', 'Dashboard'), item('providers', 'AI Providers'), h('hr'), item('account', 'Account'))));
   return h('header', { class: 'topbar' },
-    h('h1', null, h('a', { href: location.pathname, onclick: (e) => { e.preventDefault(); go('dashboard'); } }, 'AJMCP Admin')),
+    h('h1', null, h('a', { href: location.pathname, title: 'Dashboard', onclick: (e) => { e.preventDefault(); sel.add = false; go('dashboard'); } }, 'AJMCP Admin')),
     h('span', { class: 'who' }, `v${state.version} · ${state.user}`),
     menu,
     h('button', { type: 'button', onclick: signOut }, 'Sign out'));
@@ -810,7 +840,7 @@ document.addEventListener('click', (e) => {
 });
 
 function render() {
-  const body = view === 'providers' ? providersView() : view === 'account' ? accountView() : dashboard();
+  const body = dashboard();
   app.replaceChildren(...[
     topbar(),
     notice ? h('div', { class: 'notice ' + notice.kind }, notice.text, notice.secret ? h('div', { class: 'secret' }, notice.secret) : null, notice.secret ? copyButton(notice.secret) : null) : null,

@@ -243,7 +243,14 @@ label.check input { width: auto; min-height: 0; }
 
 /* account */
 .acct { max-width: 720px; }
-.acct h3 { font-size: 14px; margin: 16px 0 8px; }
+.split .panel .acct h3 { margin: 16px 0 8px; }
+/* AI Providers inside the dashboard panel: vendor list + its settings */
+.vsplit { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 14px; align-items: start; }
+.vlist { position: static; box-shadow: none; background: var(--field); }
+.vbody { min-width: 0; }
+.topbar h1 a { cursor: pointer; }
+.topbar h1 a:hover { text-decoration: underline; }
+@media (max-width: 720px) { .vsplit { grid-template-columns: 1fr; } }
 
 /* dashboard: main column + activity rail on the right */
 .dash { --rail-w: 320px; display: grid; grid-template-columns: minmax(0, 1fr) var(--rail-w); gap: 14px; align-items: start; }
@@ -251,7 +258,7 @@ label.check input { width: auto; min-height: 0; }
 .controls { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 14px; align-items: start; margin-bottom: 14px; }
 .controls > .card { margin: 0; }
 .rail-slot { align-self: stretch; min-width: 0; }
-.rail { position: sticky; top: 8px; z-index: 20; width: var(--rail-w); max-height: calc(100vh - 16px); overflow: auto; padding: 12px;
+.rail { position: sticky; top: 8px; z-index: 20; width: var(--rail-w); height: calc(100vh - 16px); overflow: auto; padding: 12px;
   background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow);
   transition: width .18s ease .3s, margin-left .18s ease .3s; }
 /* Widens leftwards over the page: right edge stays put. */
@@ -262,7 +269,13 @@ label.check input { width: auto; min-height: 0; }
 .rail .pin { min-height: 28px; padding: 3px 8px; font-size: 12px; text-transform: none; letter-spacing: 0; }
 @media (max-width: 1100px) {
   .dash { grid-template-columns: 1fr; }
-  .rail, .rail:hover, .rail.pinned { position: static; width: auto; margin-left: 0; max-height: none; box-shadow: var(--shadow); }
+  .rail, .rail:hover, .rail.pinned { position: static; width: auto; margin-left: 0; height: auto; max-height: 70vh; box-shadow: var(--shadow); }
   .rail .pin { display: none; }
 }
 @media (max-width: 900px) { .controls { grid-template-columns: 1fr; } }
+
+/* numbered login steps with copyable commands */
+.steps { margin: 4px 0 0; padding-left: 20px; color: var(--muted); font-size: 13px; display: grid; gap: 6px; }
+.cmdrow { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+.cmdrow .command { flex: 1; min-width: 0; margin: 0; color: var(--ink); }
+.cmdrow button { min-height: 30px; padding: 3px 10px; }
