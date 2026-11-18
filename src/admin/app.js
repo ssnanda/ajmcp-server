@@ -674,6 +674,8 @@ function mountFreebuffTerminal(host) {
   fbTerm.focus();
 }
 
+const FREEBUFF_CMD = "oc exec -it -n ajmcp deploy/ajmcp-server -c ajmcp -- sh -c 'cd /workspace && HOME=/data/home freebuff'";
+
 function freebuffPanel() {
   const installed = freebuff && freebuff.installed;
   const running = freebuff && freebuff.running;
@@ -697,7 +699,15 @@ function freebuffPanel() {
         h('span', { class: 'pill ' + (freebuff && freebuff.loggedIn ? 'on' : 'off') }, freebuff && freebuff.loggedIn ? 'logged in' : 'login required')),
       h('div', { class: 'actions' }, start, stop),
       h('div', { class: 'meta mt' }, 'Admin only. Freebuff can run commands and access container files. Sessions stop after 30 idle minutes or four hours total.'),
-      host));
+      host),
+    // Same login as the terminal above (/data/home survives restarts); runs in /workspace so it never edits the server code in /app.
+    h('div', { class: 'sub' },
+      h('h3', null, 'Use from Terminal on your Mac'),
+      howView([
+        ['Log in to OpenShift:', 'oc login'],
+        ['Open Freebuff in the AJMCP pod:', FREEBUFF_CMD],
+        ['First time only: press Enter, press c to copy the login link, open it in your browser and sign in.'],
+        ['After that, the same command opens Freebuff already logged in. Inside the pod, plain freebuff also works.']])));
 }
 
 function providersView() {
@@ -800,7 +810,7 @@ function ollamaPanel() {
    Lives on the right of the dashboard. Compact (time / assistant / status / took) until hovered or pinned,
    then it widens over the page and shows every column, filters and conversations. Auto-refresh repaints
    only the rail, so typing in an assistant panel is never interrupted. */
-const activity = { entries: [], since: null, problems: false, auto: true, loaded: false, timer: null, error: '', pinned: false };
+const activity = { entries: [], since: null, problems: false, kind: '', auto: true, loaded: false, timer: null, error: '', pinned: false };
 let railEl = null;
 
 async function loadActivity() {
@@ -824,6 +834,8 @@ const ROUTE_NAMES = { '/v1/ajcore/reply': 'chat / text reply', '/v1/chat': 'chat
 const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 const took = (ms) => (ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
 const openActivity = new Set();
+// Request type for the filter: the client's purpose (e.g. email triage), else the route (chat, mcp, agent…).
+const kindOf = (e) => (e.purpose ? words(e.purpose) : ROUTE_NAMES[e.route] || e.route || 'other');
 const isBad = (x) => !x.running && (x.status >= 400 || x.error);
 
 function transcriptView(entry) {
@@ -859,7 +871,10 @@ function paintRail() {
 function activityContent() {
   // One row per conversation: requests of the same assistant + session are grouped (newest first), the newest one leads.
   const groups = []; const byKey = new Map();
+  const kinds = [...new Set(activity.entries.map(kindOf))];
+  if (activity.kind && !kinds.includes(activity.kind)) kinds.push(activity.kind);
   for (const e of activity.entries) {
+    if (activity.kind && kindOf(e) !== activity.kind) continue;
     const key = e.sessionId != null ? `${e.site}|${e.assistant || ''}|${e.channel || ''}|${e.sessionId}`
       : e.conversation ? `${e.site}|${e.channel || ''}|c:${e.conversation}` : e.requestId;
     let g = byKey.get(key);
@@ -880,8 +895,9 @@ function activityContent() {
     const expanded = openActivity.has(key);
     const row = h('tr', { class: bad ? 'bad' : '', title: e.error ? words(e.error) : null },
       h('td', null, clock(e.t)),
-      h('td', null, who, e.via && e.via !== 'primary' ? h('span', { class: 'meta' }, ' · ' + e.via) : null),
-      h('td', { class: 'x' }, ROUTE_NAMES[e.route] || e.route, e.channel ? h('span', { class: 'meta' }, ' · ' + e.channel) : null),
+      h('td', null, who, e.via && e.via !== 'primary' ? h('span', { class: 'meta' }, ' · ' + e.via) : null,
+        e.purpose ? h('span', { class: 'pill purpose' }, words(e.purpose)) : null),
+      h('td', { class: 'x' }, e.purpose ? words(e.purpose) : ROUTE_NAMES[e.route] || e.route, e.channel ? h('span', { class: 'meta' }, ' · ' + e.channel) : null),
       h('td', { class: 'x' }, modelsUsed.length ? modelsUsed.map((m, k) => [k ? ', ' : '', h('code', null, m)]).flat() : '—', e.provider ? h('span', { class: 'meta' }, ' · ' + e.provider) : null),
       h('td', { class: 'x' }, e.sessionId != null ? '#' + e.sessionId : e.conversation ? h('code', { title: 'Chat id (no session sent by the client)' }, e.conversation) : '—', items.length > 1 ? h('span', { class: 'meta' }, ` · ${items.length} messages`) : (e.chars != null ? h('span', { class: 'meta' }, ` · ${e.chars} chars`) : null)),
       h('td', null, h('span', { class: 'pill ' + (e.running ? 'off' : bad ? 'bad' : 'on') }, e.running ? 'running…' : String(e.status))),
@@ -906,6 +922,9 @@ function activityContent() {
       } }, 'Clear'),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: activity.auto || null, onchange: (e) => { activity.auto = e.target.checked; } }), ' Auto-refresh'),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: activity.problems || null, onchange: (e) => { activity.problems = e.target.checked; loadActivity(); } }), ' Problems only'),
+      h('select', { class: 'kind', onchange: (e) => { activity.kind = e.target.value; paintRail(); } },
+        h('option', { value: '', selected: !activity.kind || null }, 'All types'),
+        kinds.map((k) => h('option', { value: k, selected: activity.kind === k || null }, k))),
       activity.since ? h('span', { class: 'meta' }, 'since server start ' + new Date(activity.since).toLocaleString()) : null),
     activity.error ? h('div', { class: 'notice err mt' }, activity.error) : null,
     rows.length

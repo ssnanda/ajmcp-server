@@ -286,3 +286,7 @@ label.check input { width: auto; min-height: 0; }
 .cmdrow { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
 .cmdrow .command { flex: 1; min-width: 0; margin: 0; color: var(--ink); }
 .cmdrow button { min-height: 30px; padding: 3px 10px; }
+
+/* Activity: request type label + filter */
+.pill.purpose { margin-left: 6px; color: var(--violet); border-color: var(--violet); }
+.rail select.kind { width: auto; min-height: 32px; padding: 4px 8px; }

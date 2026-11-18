@@ -66,6 +66,17 @@ function prepareAjcoreChat(body, config) {
   return { sessionId: body.sessionId, messages };
 }
 
+/** What a request is for (Activity label/filter). Clients send `purpose` in the body or an X-AJMCP-Purpose header,
+ *  e.g. "email-triage". Until a client does, a prompt with an <<<EMAIL block is recognised as email triage. */
+const PURPOSE_RE = /^[A-Za-z0-9][A-Za-z0-9 _-]{0,31}$/;
+function requestPurpose(req, body) {
+  const given = String((body && body.purpose) || req.headers['x-ajmcp-purpose'] || '').trim();
+  if (PURPOSE_RE.test(given)) return given.toLowerCase();
+  const msgs = body && Array.isArray(body.messages) ? body.messages : [];
+  const text = typeof (body && body.message) === 'string' ? body.message : (msgs.find((m) => m && m.role === 'user') || {}).content;
+  return typeof text === 'string' && text.includes('<<<EMAIL') ? 'email-triage' : undefined;
+}
+
 /** Short stable id for one chat, used only to group Activity rows. Never contains message text. */
 function conversationTag(conversationId, messages) {
   const first = Array.isArray(messages) ? messages.find((m) => m && m.role === 'user' && typeof m.content === 'string') : null;
@@ -169,6 +180,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
         note.channel = body && body.channel === 'sms' ? 'sms' : 'chat';
         if (body && Number.isSafeInteger(body.sessionId)) note.sessionId = body.sessionId;
         if (body && typeof body.message === 'string') note.chars = body.message.length;
+        note.purpose = requestPurpose(req, body);
         const slot = limiter.acquire(identity);
         if (!slot.ok) { status = slot.status; note.error = slot.code; return json(res, status, { error: slot.code }, id); }
         try {

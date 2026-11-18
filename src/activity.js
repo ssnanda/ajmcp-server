@@ -1,6 +1,6 @@
 // Recent requests, newest last, kept only in memory (a restart clears it). Chat transcripts are bounded and
 // visible only through the authenticated admin API. Tokens, credentials and arbitrary request bodies are excluded.
-const FIELDS = ['t', 'requestId', 'method', 'route', 'status', 'ms', 'site', 'via', 'channel', 'sessionId', 'conversation', 'chars', 'assistant', 'routedFrom', 'provider', 'model', 'error', 'host'];
+const FIELDS = ['t', 'requestId', 'method', 'route', 'status', 'ms', 'site', 'via', 'channel', 'sessionId', 'conversation', 'purpose', 'chars', 'assistant', 'routedFrom', 'provider', 'model', 'error', 'host'];
 const TRANSCRIPT_ROLES = new Set(['user', 'assistant', 'tool']);
 
 function cleanTranscript(raw) {

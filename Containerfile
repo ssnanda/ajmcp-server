@@ -46,6 +46,13 @@ RUN npm install --global --no-audit --no-fund \
       "@openai/codex@${CODEX_VERSION}" "@anthropic-ai/claude-code@${CLAUDE_VERSION}" "@github/copilot@${COPILOT_VERSION}" \
       "freebuff@${FREEBUFF_VERSION}" \
     && npm cache clean --force
+# Plain `freebuff` (e.g. in `oc exec … bash`) uses the persistent login in /data/home; the default HOME (/tmp/ajmcp) is
+# wiped on every restart. An explicit HOME (the admin terminal passes /data/home) is left alone.
+RUN real="$(readlink -f /usr/local/bin/freebuff)" \
+    && test -x "$real" \
+    && rm /usr/local/bin/freebuff \
+    && printf '#!/bin/sh\nif [ "$HOME" = /tmp/ajmcp ] && [ -d /data ]; then HOME=/data/home; export HOME; mkdir -p "$HOME"; fi\nexec "%s" "$@"\n' "$real" > /usr/local/bin/freebuff \
+    && chmod 0755 /usr/local/bin/freebuff
 
 COPY src/ ./src/
 RUN mkdir -p /workspace \
