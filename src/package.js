@@ -1,7 +1,7 @@
 // AJMCP assistant package: the plain-text files an assistant is made of, as ChatGPT writes them
 // (see assistants/chatgpt-project-instructions.txt, kept locally) and as export produces them.
 //
-//   <id>-assistant.json                      {"format":"ajmcp-assistant","version":1,"id","name","leadCapture","strict","transferTargets"?}
+//   <id>-assistant.json                      {"format":"ajmcp-assistant","version":1,"id","name","assistantVersion"?,"leadCapture","strict","transferTargets"?}
 //   <id>-01-ai-behavior-instructions.txt     systemPrompt
 //   <id>-02-ai-behavior-what-it-handles.txt  routeLabel (one line)
 //   <id>-03-leads-instructions.txt           leadInstructions
@@ -45,6 +45,7 @@ export function siteToPackage(site, name = '') {
   const id = site.id;
   const files = {};
   const meta = { format: PACKAGE_FORMAT, version: PACKAGE_VERSION, id, name: name || site.name || id, leadCapture: Boolean(site.leadCapture), strict: site.strict !== false };
+  if (site.assistantVersion) meta.assistantVersion = site.assistantVersion;
   if (Array.isArray(site.transferTargets) && site.transferTargets.length) meta.transferTargets = [...site.transferTargets];
   files[`${id}-assistant.json`] = JSON.stringify(meta, null, 2) + '\n';
   if (site.systemPrompt) files[`${id}-01-ai-behavior-instructions.txt`] = site.systemPrompt.trim() + '\n';
@@ -91,6 +92,8 @@ export function parsePackage(files) {
     if (meta.format && meta.format !== PACKAGE_FORMAT) out.warnings.push(`unknown package format "${meta.format}"`);
     if (Number(meta.version || 1) > PACKAGE_VERSION) out.warnings.push(`package version ${meta.version} is newer than this server understands (${PACKAGE_VERSION})`);
     if (typeof meta.name === 'string' && meta.name.trim() && meta.name.trim() !== meta.id) out.fields.name = meta.name.trim();
+    if (typeof meta.assistantVersion === 'string' && /^\d{1,4}\.\d{1,4}\.\d{1,6}$/.test(meta.assistantVersion.trim())) out.fields.assistantVersion = meta.assistantVersion.trim();
+    else if (meta.assistantVersion !== undefined) out.warnings.push('assistantVersion must look like 0.0.1, ignored');
     if (typeof meta.leadCapture === 'boolean') out.fields.leadCapture = meta.leadCapture;
     if (typeof meta.strict === 'boolean') out.fields.strict = meta.strict;
     if (Array.isArray(meta.transferTargets)) out.fields.transferTargets = meta.transferTargets.map(String);

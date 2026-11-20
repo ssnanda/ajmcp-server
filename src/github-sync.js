@@ -45,12 +45,50 @@ export class GitHubSync {
     this.status = { lastPush: null, lastPull: null, lastChats: null, lastError: '', unknownFolders: [], rejected: [] };
     this.chats = new Map();        // chat file path -> markdown (latest full transcript wins)
     this.chatTimer = null;
+    this.lastHead = '';            // branch head seen by the periodic check
+    this.lastPollAt = 0;
+    this.ticker = null;
+  }
+
+  /**
+   * Periodic jobs (one 60-second ticker): every `pollMinutes` check whether the branch head moved and, if so, pull
+   * (only folders that differ are imported; our own commits find identical files) — a safety net for missed or
+   * unconfigured webhooks. Chat transcripts are pushed on their own `chatMinutes` timer (see queueChat).
+   */
+  start() {
+    if (this.ticker) return;
+    this.ticker = setInterval(() => this.tick().catch((error) => { this.status.lastError = String(error.message || error); }), 60_000);
+    if (this.ticker.unref) this.ticker.unref();
+  }
+
+  async tick() {
+    const { pollMinutes, pullOnWebhook } = this.settings;
+    if (!this.configured || !pollMinutes || !pullOnWebhook) return;
+    if (Date.now() - this.lastPollAt < pollMinutes * 60_000) return;
+    this.lastPollAt = Date.now();
+    let head = '';
+    try { head = (await this.api('GET', `/git/ref/heads/${encodeURIComponent(this.settings.branch)}`)).object.sha; }
+    catch (error) { if (error.status === 404 || error.status === 409) return; throw error; }
+    this.status.lastPoll = { at: new Date().toISOString(), head: head.slice(0, 7) };
+    if (head === this.lastHead) return;
+    const first = !this.lastHead;
+    this.lastHead = head;
+    // The first check after a restart also pulls: anything committed while the server was down is picked up.
+    await this.serial(() => this.pull([]));
+    if (!first) this.status.lastPoll.pulled = true;
+  }
+
+  /** Recent commits touching one assistant's folder: [{ sha, date, author, message }]. */
+  async history(id, limit = 15) {
+    if (!this.configured) throw new Error('github_not_configured');
+    const commits = await this.api('GET', `/commits?path=${encodeURIComponent(id)}&sha=${encodeURIComponent(this.settings.branch)}&per_page=${Math.min(50, Math.max(1, limit))}`);
+    return (commits || []).map((c) => ({ sha: String(c.sha).slice(0, 7), date: c.commit?.author?.date || '', author: c.commit?.author?.name || '', message: String(c.commit?.message || '').split('\n')[0].replace(` ${COMMIT_MARK}`, '').slice(0, 200), url: c.html_url || '' }));
   }
 
   /**
    * Chat transcripts (only when "Also save chat transcripts" is on): one Markdown file per conversation under
    * chats/<YYYY-MM-DD>/<assistant>-<session>.md, rewritten with the full transcript each turn and committed in
-   * batches at most once a minute. One-way: the server never reads chats back. Customer data, so off by default.
+   * batches every `chatMinutes` (default 15). One-way: the server never reads chats back. Customer data, so off by default.
    */
   queueChat(entry) {
     if (!this.configured || !this.settings.syncChats) return;
@@ -74,7 +112,7 @@ export class GitHubSync {
       lines.push(`**${role}:**`, '', String(m.content || '').trim(), '');
     }
     this.chats.set(path, lines.join('\n'));
-    if (!this.chatTimer) this.chatTimer = setTimeout(() => { this.chatTimer = null; this.serial(() => this.pushChats()); }, 60_000);
+    if (!this.chatTimer) this.chatTimer = setTimeout(() => { this.chatTimer = null; this.serial(() => this.pushChats()); }, (this.settings.chatMinutes || 15) * 60_000);
   }
 
   async pushChats() {
@@ -287,7 +325,7 @@ export class GitHubSync {
   }
 }
 
-const EDITABLE = ['name', 'systemPrompt', 'routeLabel', 'leadCapture', 'leadInstructions', 'fallback', 'strict', 'transferTargets', 'tests'];
+const EDITABLE = ['name', 'assistantVersion', 'systemPrompt', 'routeLabel', 'leadCapture', 'leadInstructions', 'fallback', 'strict', 'transferTargets', 'tests'];
 function pickFields(fields) { return Object.fromEntries(EDITABLE.filter((k) => fields[k] !== undefined).map((k) => [k, fields[k]])); }
 
 export const newWebhookSecret = () => randomBytes(24).toString('hex');

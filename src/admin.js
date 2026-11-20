@@ -162,7 +162,7 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
   };
 
   const siteView = (site) => ({
-    id: site.id, provider: site.provider, model: site.model, systemPrompt: site.systemPrompt,
+    id: site.id, name: site.name || '', assistantVersion: site.assistantVersion || '', provider: site.provider, model: site.model, systemPrompt: site.systemPrompt,
     disabled: Boolean(site.disabled), strict: site.strict !== false, fallback: site.fallback || '',
     leadCapture: Boolean(site.leadCapture), leadInstructions: site.leadInstructions || '',
     routeLabel: site.routeLabel || '', transferTargets: site.transferTargets || [], tests: site.tests || [],
@@ -205,6 +205,8 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
     return {
       repo: g.repo, branch: g.branch, tokenSet: Boolean(g.token), tokenHint: g.token ? g.token.slice(-4) : '',
       webhookSet: Boolean(g.webhookSecret), pushOnSave: g.pushOnSave, pullOnWebhook: g.pullOnWebhook, syncChats: g.syncChats,
+      pollMinutes: g.pollMinutes, chatMinutes: g.chatMinutes,
+      assistants: store.sites().map((s) => ({ id: s.id, name: s.name || '', version: s.assistantVersion || '' })),
       webhookUrl: `https://${String(host || '').replace(/[^A-Za-z0-9.:-]/g, '')}/github/webhook`,
       status: github ? github.status : null
     };
@@ -420,7 +422,7 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
     if (method === 'GET' && path === '/admin/api/github') return send(res, 200, githubView(req.headers.host));
     if (method === 'PUT' && path === '/admin/api/github') {
       const input = {};
-      for (const k of ['repo', 'branch', 'pushOnSave', 'pullOnWebhook', 'syncChats']) if (body[k] !== undefined) input[k] = body[k];
+      for (const k of ['repo', 'branch', 'pushOnSave', 'pullOnWebhook', 'syncChats', 'pollMinutes', 'chatMinutes']) if (body[k] !== undefined) input[k] = body[k];
       if (body.token !== undefined) input.token = body.token;   // '' or null clears
       store.setGithub(input);
       return send(res, 200, githubView(req.headers.host));
@@ -430,6 +432,14 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
       const secret = newWebhookSecret();
       store.setGithub({ webhookSecret: secret });
       return send(res, 200, { secret, ...githubView(req.headers.host) });
+    }
+    // One assistant's change history in the repo (commits touching its folder).
+    if (method === 'GET' && path === '/admin/api/github/history') {
+      if (!github || !github.configured) throw new AdminError('github_not_configured', 409);
+      const siteId = new URL(req.url, 'http://x').searchParams.get('id') || '';
+      if (!/^[a-z0-9][a-z0-9-_]{1,63}$/.test(siteId)) throw new AdminError('invalid_site_id');
+      try { return send(res, 200, { ok: true, commits: await github.history(siteId) }); }
+      catch (error) { return send(res, 200, { ok: false, error: String(error.message || error) }); }
     }
     // Version tags on the assistants repo.
     if ((method === 'GET' || method === 'POST') && path === '/admin/api/github/tags') {

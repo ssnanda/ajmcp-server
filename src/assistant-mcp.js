@@ -32,7 +32,7 @@ export function connectionTokenFrom(req, path) {
   return path.startsWith('/assistants/mcp/') && !segment.includes('/') ? segment : '';
 }
 
-const EDITABLE = ['name', 'systemPrompt', 'routeLabel', 'leadCapture', 'leadInstructions', 'fallback', 'strict', 'transferTargets', 'tests'];
+const EDITABLE = ['name', 'assistantVersion', 'systemPrompt', 'routeLabel', 'leadCapture', 'leadInstructions', 'fallback', 'strict', 'transferTargets', 'tests'];
 const pick = (input) => Object.fromEntries(EDITABLE.filter((k) => input[k] !== undefined).map((k) => [k, input[k]]));
 const text = (value) => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] });
 const fail = (code) => ({ isError: true, content: [{ type: 'text', text: String(code) }] });
@@ -129,7 +129,7 @@ export async function handleAssistantMcp(req, res, { store, config, limiter, con
     description: 'Change one or more fields of an assistant. Limits: systemPrompt 12,000 chars, routeLabel 200, leadInstructions 4,000, fallback 500, tests 30 (question 300, expected 500), transferTargets 10 assistant ids.',
     inputSchema: z.object({
       id,
-      name: z.string().max(80).optional(), systemPrompt: z.string().optional(), routeLabel: z.string().optional(), leadCapture: z.boolean().optional(),
+      name: z.string().max(80).optional(), assistantVersion: z.string().regex(/^\d{1,4}\.\d{1,4}\.\d{1,6}$/).optional().describe('This assistant\'s release, e.g. 0.0.2 (bump on every change)'), systemPrompt: z.string().optional(), routeLabel: z.string().optional(), leadCapture: z.boolean().optional(),
       leadInstructions: z.string().optional(), fallback: z.string().optional(), strict: z.boolean().optional(),
       transferTargets: z.array(z.string()).optional(),
       tests: z.array(z.object({ question: z.string(), expected: z.string().optional() })).optional()

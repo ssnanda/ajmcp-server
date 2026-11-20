@@ -92,6 +92,17 @@ in the admin and shown once.
 - Folders without a matching assistant are reported, never created.
 - **Pull all** imports every folder that differs.
 
+**Assistant versions.** Each assistant has an `assistantVersion` (x.y.z) in `<id>-assistant.json`.
+- It is stored in AJMCP and shown next to the assistant, and in Settings › GitHub sync › Versions, which
+  also has a **History** of the commits that touched that folder.
+- Editors bump it on every change.
+
+**Periodic jobs.**
+- Every *Check GitHub every* minutes (default 15; off disables it), the server compares the branch head
+  and pulls when it moved. This covers missed or unconfigured webhooks, and the first check after a
+  restart pulls too.
+- Queued chat transcripts are committed every *Push chats every* minutes (default 15).
+
 **Versions.** Settings › GitHub sync › Versions, or the `tag_version` MCP tool, creates an annotated
 tag on the branch head with a note.
 - Changes still waiting to be committed are pushed first.

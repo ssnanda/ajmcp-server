@@ -42,7 +42,10 @@ function cleanSite(input, existing = {}) {
   const tests = cleanTests(input.tests ?? existing.tests ?? []);
   // Display name (e.g. "NC LLC Agents Inc."), carried in the package's assistant.json; '' = use the id.
   const name = String(input.name ?? existing.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
-  return { name, provider, model, systemPrompt, tests, leadCapture: Boolean(input.leadCapture ?? existing.leadCapture), leadInstructions, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback, routeLabel, transferTargets };
+  // The assistant's own release number (e.g. 0.0.1), bumped by whoever edits it; '' = not versioned yet.
+  const assistantVersion = String(input.assistantVersion ?? existing.assistantVersion ?? '').trim();
+  if (assistantVersion && !/^\d{1,4}\.\d{1,4}\.\d{1,6}$/.test(assistantVersion)) throw new StoreError('invalid_assistant_version');
+  return { name, assistantVersion, provider, model, systemPrompt, tests, leadCapture: Boolean(input.leadCapture ?? existing.leadCapture), leadInstructions, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback, routeLabel, transferTargets };
 }
 
 // Assistant-management connection tokens (for /assistants/mcp). Short-lived on purpose: 15 minutes by default,
@@ -70,7 +73,10 @@ function cleanGithub(raw = {}) {
     webhookSecret: /^[0-9a-f]{32,128}$/.test(String(raw.webhookSecret || '')) ? String(raw.webhookSecret) : '',
     pushOnSave: raw.pushOnSave !== false,
     pullOnWebhook: raw.pullOnWebhook !== false,
-    syncChats: Boolean(raw.syncChats)
+    syncChats: Boolean(raw.syncChats),
+    // Periodic jobs, in minutes: check GitHub for new commits and pull (0 = off), and push queued chat transcripts.
+    pollMinutes: [0, 5, 15, 30, 60].includes(Number(raw.pollMinutes)) ? Number(raw.pollMinutes) : 15,
+    chatMinutes: [5, 15, 30, 60].includes(Number(raw.chatMinutes)) ? Number(raw.chatMinutes) : 15
   };
 }
 
@@ -110,6 +116,7 @@ function toStored(site) {
     tokenHash: site.tokenHash || tokenHash(site.token),
     tokenHint: site.tokenHint || String(site.token || '').slice(-4),
     name: site.name ? String(site.name).slice(0, 80) : '',
+    assistantVersion: site.assistantVersion ? String(site.assistantVersion).slice(0, 20) : '',
     provider: site.provider || 'openai',
     model: site.model || '',
     systemPrompt: site.systemPrompt || '',

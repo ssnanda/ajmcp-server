@@ -121,6 +121,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
   // GitHub is skipped; it would only find identical files anyway).
   const github = new GitHubSync({ store, fetchFn, log: (code, detail) => console.warn(JSON.stringify({ t: new Date().toISOString(), event: code, detail })) });
   store.onSitesChanged = (ids, reason) => { if (reason !== 'github') github.queuePush(ids, reason); };
+  github.start();   // periodic GitHub check + pull (Settings › GitHub sync › Check GitHub every)
   const admin = config.adminUser
     ? createAdmin({ config, store, stats, activity, fetchFn, readBody, github })
     : null;

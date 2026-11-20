@@ -411,7 +411,8 @@ function treeNode(site) {
     } },
       h('span', { class: 'caret' }, opened ? '▾' : '▸'),
       h('span', { class: 'dot tone-' + site.provider + (site.disabled ? ' off' : '') }),
-      h('span', { class: 'tname' }, site.id),
+      h('span', { class: 'tname', title: site.name || site.id }, site.id),
+      site.assistantVersion ? h('span', { class: 'count', title: 'Assistant version' }, 'v' + site.assistantVersion) : null,
       site.disabled ? h('span', { class: 'pill off' }, 'off') : null),
     opened ? h('div', { class: 'tkids' }, SECTIONS.map(([key, label]) => h('button', { type: 'button', class: 'tchild' + (here && sel.section === key ? ' on' : ''), onclick: () => { sel = { id: site.id, section: key, add: false }; go('dashboard'); } },
       label, key === 'knowledge' && site.knowledge.length ? h('span', { class: 'count' }, site.knowledge.length) : key === 'tests' && (site.tests || []).length ? h('span', { class: 'count' }, site.tests.length) : null))) : null);
@@ -993,6 +994,7 @@ function connectionsView() {
 /* ---------- GitHub sync: assistants <-> private repo, run by the server ---------- */
 let gh = null;
 let ghTags = null;   // [{ name, commit, url }] or { error }
+const ghHistory = {};  // assistant id -> 'loading' | [{ sha, date, author, message, url }] | { error }
 // What has been typed but not saved yet. The page re-renders as data arrives (models, activity, etc.); without this
 // a re-render rebuilt the inputs empty and Save then stored blank values.
 const ghDraft = {};
@@ -1009,10 +1011,13 @@ function githubView() {
   const pull = box(gh.pullOnWebhook);
   const chats = box(gh.syncChats);
   const check = (c, text) => h('label', { style: 'display:flex;align-items:center;font-weight:400;margin:4px 16px 4px 0' }, c, text);
+  const choose = (value, options) => { const sel = h('select', null, ...options.map(([v, t]) => h('option', { value: String(v) }, t))); sel.value = String(value); return sel; };
+  const poll = choose(gh.pollMinutes ?? 15, [[0, 'Off'], [5, '5 minutes'], [15, '15 minutes'], [30, '30 minutes'], [60, '1 hour']]);
+  const chatEvery = choose(gh.chatMinutes ?? 15, [[5, '5 minutes'], [15, '15 minutes'], [30, '30 minutes'], [60, '1 hour']]);
   const st = gh.status || {};
   const save = h('form', { onsubmit: (e) => {
     e.preventDefault();
-    const body = { repo: repo.value.trim(), branch: branch.value.trim() || 'main', pushOnSave: push.checked, pullOnWebhook: pull.checked, syncChats: chats.checked };
+    const body = { repo: repo.value.trim(), branch: branch.value.trim() || 'main', pushOnSave: push.checked, pullOnWebhook: pull.checked, syncChats: chats.checked, pollMinutes: Number(poll.value), chatMinutes: Number(chatEvery.value) };
     if (token.value.trim()) body.token = token.value.trim();
     if (!body.repo) { notice = { kind: 'err', text: 'Enter the repository, e.g. ssnanda/ajmcp-assistants or its GitHub URL.' }; render(); return; }
     if (!gh.tokenSet && !body.token) { notice = { kind: 'err', text: 'Paste the access token (see "Which token to create").' }; render(); return; }
@@ -1035,6 +1040,7 @@ function githubView() {
       check(push, 'Commit changes made in AJMCP'),
       check(pull, 'Import pushes from GitHub (webhook)'),
       check(chats, 'Also save chat transcripts (customer data)')),
+    h('div', { class: 'row' }, field('Check GitHub for new commits every', poll), field('Push new chat transcripts every', chatEvery)),
     h('button', { type: 'submit' }, 'Save'));
   const actions = h('div', { class: 'row' },
     h('button', { type: 'button', onclick: () => run(async () => { const r = await api('/github/push-all', 'POST'); gh = r; if (!r.ok) throw new Error(r.error); }, 'Pushed') }, 'Push all to GitHub'),
@@ -1049,6 +1055,7 @@ function githubView() {
     h('div', { class: 'acct' }, save),
     actions,
     h('div', { class: 'facts' }, field('Last push', h('span', null, lastPush)), field('Last pull', h('span', null, lastPull)),
+      field('Last check', h('span', null, st.lastPoll ? `${when(st.lastPoll.at)} · ${st.lastPoll.head}` : 'not yet')),
       gh.syncChats ? field('Last chat commit', h('span', null, st.lastChats ? `${when(st.lastChats.at)}: ${st.lastChats.files} files` : 'none yet')) : null),
     st.lastError ? h('div', { class: 'notice err' }, st.lastError) : null,
     (st.rejected || []).length ? h('div', { class: 'notice err' }, 'Rejected from GitHub: ' + st.rejected.map((r) => `${r.id} (${words(r.error)})`).join(', ')) : null,
@@ -1078,7 +1085,22 @@ function versionsPanel() {
     : ghTags.length ? h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', null, 'Tag'), h('th', null, 'Commit'))),
       h('tbody', null, ...ghTags.slice(0, 15).map((t) => h('tr', null, h('td', null, h('a', { href: t.url, target: '_blank', rel: 'noopener' }, t.name)), h('td', null, h('code', null, t.commit))))))
     : h('p', { class: 'muted' }, 'No versions yet.');
-  return h('div', { class: 'acct' }, form, list,
+  const rows = (gh.assistants || []).map((a) => {
+    const hist = ghHistory[a.id];
+    return [h('tr', null,
+      h('td', null, a.name ? `${a.name} ` : '', h('code', null, a.id)),
+      h('td', null, a.version ? 'v' + a.version : h('span', { class: 'muted' }, '–')),
+      h('td', null, h('button', { type: 'button', onclick: () => {
+        if (hist) { delete ghHistory[a.id]; render(); return; }
+        ghHistory[a.id] = 'loading'; render();
+        api('/github/history?id=' + encodeURIComponent(a.id)).then((d) => { ghHistory[a.id] = d.ok ? d.commits : { error: d.error }; render(); }).catch(() => { ghHistory[a.id] = { error: 'could not load' }; render(); });
+      } }, hist ? 'Hide history' : 'History'))),
+      hist ? h('tr', null, h('td', { colspan: 3 }, hist === 'loading' ? 'Loading…' : hist.error ? words(hist.error)
+        : hist.length ? h('ul', { style: 'margin:4px 0 8px 18px' }, ...hist.map((c) => h('li', null, h('code', null, c.sha), ' ', new Date(c.date).toLocaleString(), ' · ', c.author, ' · ', c.url ? h('a', { href: c.url, target: '_blank', rel: 'noopener' }, c.message) : c.message)))
+        : 'No commits yet.')) : null];
+  }).flat().filter(Boolean);
+  const perAssistant = rows.length ? h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', null, 'Assistant'), h('th', null, 'Version'), h('th', null, ''))), h('tbody', null, ...rows)) : null;
+  return h('div', { class: 'acct' }, perAssistant, h('h4', null, 'Repo tags'), form, list,
     h('details', null, h('summary', null, 'About versions'),
       h('p', null, 'A tag marks the repo as it is now (every assistant), so you can go back to it on GitHub. Changes still waiting to be committed are pushed first. Tag names: letters, numbers, dots, dashes, slashes, e.g. v2026-11-20 or ncllcagents-v3.')));
 }
