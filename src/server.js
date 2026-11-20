@@ -9,6 +9,8 @@ import { routeChat, ConversationStore, KEY_RE } from './routing.js';
 import { LeadLimiter } from './leads.js';
 import { runAgent, installedToolVersions } from './agents.js';
 import { handleMcp } from './mcp.js';
+import { handleAssistantMcp, connectionForToken, connectionTokenFrom } from './assistant-mcp.js';
+import { GitHubSync } from './github-sync.js';
 import { APP_VERSION } from './version.js';
 import { createAdmin, Stats } from './admin.js';
 import { handleSiteApi } from './siteapi.js';
@@ -115,16 +117,23 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
   const convs = new ConversationStore(config.dataDir);
   convs.load();
   // The admin UI exists only when ADMIN_USER / ADMIN_PASSWORD_HASH are configured (see DATA_DIR).
+  // Two-way GitHub sync of assistants: every saved change is queued for a commit (an import that came FROM
+  // GitHub is skipped; it would only find identical files anyway).
+  const github = new GitHubSync({ store, fetchFn, log: (code, detail) => console.warn(JSON.stringify({ t: new Date().toISOString(), event: code, detail })) });
+  store.onSitesChanged = (ids, reason) => { if (reason !== 'github') github.queuePush(ids, reason); };
   const admin = config.adminUser
-    ? createAdmin({ config, store, stats, activity, fetchFn, readBody })
+    ? createAdmin({ config, store, stats, activity, fetchFn, readBody, github })
     : null;
   return http.createServer(async (req, res) => {
     const id = randomUUID();
     const start = Date.now();
     const path = new URL(req.url || '/', 'http://localhost').pathname;
+    // /assistants/mcp/<token> carries a token in the path: logs and the activity list only ever see the bare route.
+    const isAssistantMcp = path === '/assistants/mcp' || path.startsWith('/assistants/mcp/');
+    const logRoute = isAssistantMcp ? '/assistants/mcp' : path;
     let status = 500;
     const note = {};   // bounded admin audit details; never credentials or arbitrary request bodies
-    const live = path.startsWith('/v1/') || path === '/mcp' ? activity.start({ t: new Date().toISOString(), requestId: id, method: req.method, route: path }, note) : null;
+    const live = path.startsWith('/v1/') || path === '/mcp' || isAssistantMcp || path === '/github/webhook' ? activity.start({ t: new Date().toISOString(), requestId: id, method: req.method, route: logRoute }, note) : null;
     try {
       // Health probes reach the pod using its internal IP/Host, not the public OpenShift Route.
       // No secrets or tenant information are exposed by these probe endpoints.
@@ -138,6 +147,27 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
       if (admin && (path === '/admin' || path.startsWith('/admin/'))) {
         if (!validateHostHeader(req, config)) { status = 403; return json(res, status, { error: 'untrusted_origin_or_host' }, id); }
         await admin(req, res, path);
+        status = res.statusCode; return;
+      }
+      // GitHub push webhook for the assistants repo: authenticated by its HMAC signature, not a bearer token.
+      if (req.method === 'POST' && path === '/github/webhook') {
+        if (!validateHostHeader(req, config)) { status = 403; return json(res, status, { error: 'untrusted_origin_or_host' }, id); }
+        const chunks = [];
+        let size = 0;
+        for await (const chunk of req) { size += chunk.length; if (size > 2_000_000) { status = 413; return json(res, status, { error: 'request_too_large' }, id); } chunks.push(chunk); }
+        const out = github.handleWebhook(req.headers, Buffer.concat(chunks));
+        note.site = 'github'; if (out.body.error) note.error = out.body.error;
+        status = out.status; return json(res, status, out.body, id);
+      }
+      // Assistant-management MCP: short-lived connection tokens from admin › Connections. Server-to-server clients
+      // (Claude Code, ChatGPT connectors) send no browser Origin, so only the Host is checked here.
+      if (isAssistantMcp && ['POST', 'GET', 'DELETE'].includes(req.method)) {
+        if (!validateHostHeader(req, config)) { status = 403; note.error = 'untrusted_host'; return json(res, status, { error: 'untrusted_origin_or_host' }, id); }
+        const connection = connectionForToken(connectionTokenFrom(req, path), store);
+        if (!connection) { status = 401; note.error = 'bad_or_expired_connection_token'; return json(res, status, { error: 'unauthorized' }, id); }
+        note.site = 'connection'; note.via = `${connection.label} (${connection.scope})`;
+        store.touchConnection(connection.id);
+        await handleAssistantMcp(req, res, { store, config, limiter, connection, fetchFn });
         status = res.statusCode; return;
       }
       if (!validateHost(req, config)) { status = 403; note.error = 'untrusted_origin_or_host'; note.host = String(req.headers.host || ''); return json(res, status, { error: 'untrusted_origin_or_host' }, id); }
@@ -192,6 +222,10 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
             const context = chatContext(body, ajcore ? ajcore.sessionId : 0);
             const messages = ajcore ? ajcore.messages : body.messages;
             if (Array.isArray(messages)) note.transcript = messages.map(({ role, content }) => ({ role, content }));
+            // Who the customer is, when the caller knows (chat form or SMS number): "name · email · phone". Admin-only.
+            const who = context.visitor || {};
+            const label = [who.name, who.email, who.phone].filter(Boolean).join(' · ');
+            if (label) note.visitor = label.slice(0, 120);
             // Activity groups one chat into one row. Clients without a sessionId (e.g. aados) resend the full history each turn,
             // so their conversationId, else a hash of the first user message, stays the same for the whole chat.
             if (note.sessionId == null) note.conversation = conversationTag(context.conversationId, messages);
@@ -254,11 +288,13 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
     } finally {
       if (live) activity.end(live);
       // Transcripts stay in the in-memory admin audit only; ordinary container logs contain metadata, never text or credentials.
-      const entry = { t: new Date().toISOString(), requestId: id, method: req.method, route: path, status: res.statusCode || status, ms: Date.now() - start, ...note };
-      console.info(JSON.stringify({ t: entry.t, requestId: id, method: req.method, route: path, status: entry.status, durationMs: entry.ms,
+      const entry = { t: new Date().toISOString(), requestId: id, method: req.method, route: logRoute, status: res.statusCode || status, ms: Date.now() - start, ...note };
+      console.info(JSON.stringify({ t: entry.t, requestId: id, method: req.method, route: logRoute, status: entry.status, durationMs: entry.ms,
         site: note.site, channel: note.channel, sessionId: note.sessionId, provider: note.provider, model: note.model, error: note.error }));
       // Only the API routes matter here; browser page loads, favicon and probes would only add noise.
-      if (path.startsWith('/v1/') || path === '/mcp') activity.add(entry);
+      if (path.startsWith('/v1/') || path === '/mcp' || isAssistantMcp || path === '/github/webhook') activity.add(entry);
+      // Optional (GitHub sync › "Also save chat transcripts"): one file per conversation, batched commits.
+      if (Array.isArray(entry.transcript) && entry.transcript.length) github.queueChat(entry);
     }
   });
 }

@@ -81,7 +81,7 @@ function readCookie(req, name) {
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function createAdmin({ config, store, stats, activity, fetchFn = fetch, readBody }) {
+export function createAdmin({ config, store, stats, activity, fetchFn = fetch, readBody, github = null }) {
   const freebuff = new FreebuffTerminal(config);
   // Sessions survive restarts and deploys: they are kept (hashed) in DATA_DIR/sessions.json. Each one is
   // tied to the current admin password, so a password change or --reset-admin signs everything out.
@@ -199,6 +199,18 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
       restartRequired: true
     }
   });
+
+  const githubView = (host) => {
+    const g = store.githubSettings();
+    return {
+      repo: g.repo, branch: g.branch, tokenSet: Boolean(g.token), tokenHint: g.token ? g.token.slice(-4) : '',
+      webhookSet: Boolean(g.webhookSecret), pushOnSave: g.pushOnSave, pullOnWebhook: g.pullOnWebhook, syncChats: g.syncChats,
+      webhookUrl: `https://${String(host || '').replace(/[^A-Za-z0-9.:-]/g, '')}/github/webhook`,
+      status: github ? github.status : null
+    };
+  };
+  const connectionView = (c) => ({ id: c.id, label: c.label, scope: c.scope, tokenHint: c.tokenHint, createdAt: c.createdAt, expiresAt: c.expiresAt, lastUsedAt: c.lastUsedAt });
+  const connectionsView = () => store.connections().map(connectionView);
 
   const findSite = (id) => {
     const site = store.sites().find((s) => s.id === id);
@@ -403,6 +415,47 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
         if (error instanceof CliError) return send(res, 200, { ok: false, error: error.code, detail: error.detail });
         throw error;
       }
+    }
+    // GitHub two-way sync of assistants (see github-sync.js).
+    if (method === 'GET' && path === '/admin/api/github') return send(res, 200, githubView(req.headers.host));
+    if (method === 'PUT' && path === '/admin/api/github') {
+      const input = {};
+      for (const k of ['repo', 'branch', 'pushOnSave', 'pullOnWebhook', 'syncChats']) if (body[k] !== undefined) input[k] = body[k];
+      if (body.token !== undefined) input.token = body.token;   // '' or null clears
+      store.setGithub(input);
+      return send(res, 200, githubView(req.headers.host));
+    }
+    if (method === 'POST' && path === '/admin/api/github/secret') {
+      const { newWebhookSecret } = await import('./github-sync.js');
+      const secret = newWebhookSecret();
+      store.setGithub({ webhookSecret: secret });
+      return send(res, 200, { secret, ...githubView(req.headers.host) });
+    }
+    if (method === 'POST' && (path === '/admin/api/github/push-all' || path === '/admin/api/github/pull-all')) {
+      if (!github || !github.configured) throw new AdminError('github_not_configured', 409);
+      try {
+        const result = path.endsWith('push-all') ? await github.push([], 'push all from admin') : await github.pull([]);
+        return send(res, 200, { ok: true, result, ...githubView(req.headers.host) });
+      } catch (error) {
+        github.status.lastError = String(error.message || error);
+        return send(res, 200, { ok: false, error: github.status.lastError, ...githubView(req.headers.host) });
+      }
+    }
+    // Assistant-management connections (/assistants/mcp): short-lived tokens for Claude Code / ChatGPT.
+    if (method === 'GET' && path === '/admin/api/connections') return send(res, 200, { connections: connectionsView() });
+    if (method === 'POST' && path === '/admin/api/connections') {
+      const { token, entry } = store.addConnection(body.label, body.scope, body.minutes ?? 15);
+      const base = `https://${String(req.headers.host || '').replace(/[^A-Za-z0-9.:-]/g, '')}/assistants/mcp`;
+      return send(res, 201, {
+        connection: connectionView(entry), token,
+        url: base,
+        urlWithToken: `${base}/${token}`,
+        claudeCommand: `claude mcp add --transport http ajmcp-assistants ${base} --header "Authorization: Bearer ${token}"`
+      });
+    }
+    if (method === 'DELETE' && path.startsWith('/admin/api/connections/')) {
+      store.removeConnection(path.slice('/admin/api/connections/'.length));
+      return send(res, 200, { ok: true });
     }
     if (method === 'POST' && path === '/admin/api/password') {
       const { current, next } = body;

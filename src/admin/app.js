@@ -9,7 +9,7 @@ const MASTER_CHOICES = [['', 'Per assistant'], ['claude', 'Claude'], ['codex', '
 const MASTER_PROVIDER = { claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli', copilot: 'copilot-cli', ollama: 'ollama' };
 const isCli = (p) => p.endsWith('-cli');
 // Views: the dashboard plus focused Settings pages.
-const VIEWS = ['dashboard', 'providers', 'account'];
+const VIEWS = ['dashboard', 'providers', 'connections', 'github', 'account'];
 const fromHash = () => { const k = location.hash.slice(1); return k === 'logins' ? 'providers' : VIEWS.includes(k) ? k : 'dashboard'; };
 let view = fromHash();
 function go(v) {
@@ -541,7 +541,7 @@ function sitesTab() {
     h('button', { type: 'button', class: 'tadd' + (view === 'dashboard' && sel.add ? ' on' : ''), onclick: () => { sel = { id: sel.id, section: sel.section, add: true }; go('dashboard'); } }, '+ Add assistant'),
     ...state.sites.map(treeNode),
     state.sites.length ? null : h('div', { class: 'empty' }, 'No assistants yet.'));
-  const panel = view === 'providers' ? providersView() : view === 'account' ? accountView() : sel.add ? [h('h2', null, 'Add assistant'), ...addPanel()]
+  const panel = view === 'providers' ? providersView() : view === 'connections' ? connectionsView() : view === 'github' ? githubView() : view === 'account' ? accountView() : sel.add ? [h('h2', null, 'Add assistant'), ...addPanel()]
     : [h('h2', null, h('span', { class: 'grow' }, `${site.id} · ${(SECTIONS.find(([k]) => k === sel.section) || [0, ''])[1]}`),
         h('span', { class: 'pill ' + (site.disabled ? 'off' : 'on') }, site.disabled ? 'disabled' : 'active'),
         h('span', { class: 'pill tone-' + site.provider }, providerLabel(site.provider))),
@@ -848,7 +848,7 @@ function transcriptView(entry) {
       entry.routedFrom ? h('span', null, 'Routed from ', h('code', null, entry.routedFrom)) : null),
     messages.length ? h('div', { class: 'conversation' }, messages.map((message) =>
       h('div', { class: 'bubble ' + message.role },
-        h('div', { class: 'bubble-role' }, message.role === 'user' ? 'Visitor' : message.role === 'assistant' ? 'Assistant' : `Tool${message.name ? ` · ${message.name}` : ''}`),
+        h('div', { class: 'bubble-role' }, message.role === 'user' ? (entry.visitor || 'Visitor') : message.role === 'assistant' ? 'Assistant' : `Tool${message.name ? ` · ${message.name}` : ''}`),
         h('div', { class: 'bubble-text' }, message.content))))
       : h('div', { class: 'empty' }, entry.error ? `No transcript captured · ${words(entry.error)}` : 'No transcript captured for this request.'));
 }
@@ -951,6 +951,91 @@ function accountView() {
       h('h3', null, 'Change password'), passwordForm())];
 }
 
+/* ---------- connections: short-lived tokens for the assistant-management MCP (/assistants/mcp) ---------- */
+let connections = null;   // [{ id, label, scope, tokenHint, createdAt, expiresAt, lastUsedAt }]
+let lastConnection = null; // the just-created token (shown once)
+function minutesLeft(iso) { return Math.max(0, Math.round((Date.parse(iso) - Date.now()) / 60000)); }
+function connectionsView() {
+  if (!connections) api('/connections').then((d) => { connections = d.connections; if (view === 'connections') render(); }).catch(() => { connections = []; });
+  const label = h('input', { value: 'Claude Code', maxlength: 40, required: true });
+  const scope = h('select', null, h('option', { value: 'write' }, 'Read & write'), h('option', { value: 'read' }, 'Read only'));
+  const minutes = h('select', null, h('option', { value: '15' }, '15 minutes'), h('option', { value: '30' }, '30 minutes'));
+  const form = h('form', { onsubmit: (e) => {
+    e.preventDefault();
+    run(async () => {
+      lastConnection = await api('/connections', 'POST', { label: label.value.trim(), scope: scope.value, minutes: Number(minutes.value) });
+      connections = null;
+    }, 'Token created; copy it now, it is shown once');
+  } }, h('div', { class: 'row' }, field('Name', label), field('Access', scope), field('Expires after', minutes)), h('button', { type: 'submit' }, 'Create token'));
+  const created = lastConnection ? h('div', { class: 'acct' },
+    h('h3', null, `${lastConnection.connection.label}: expires in ${minutesLeft(lastConnection.connection.expiresAt)} min`),
+    field('Claude Code (run once in a terminal)', h('div', { class: 'secret' }, lastConnection.claudeCommand)), copyButton(lastConnection.claudeCommand),
+    field('ChatGPT connector URL (no authentication)', h('div', { class: 'secret' }, lastConnection.urlWithToken)), copyButton(lastConnection.urlWithToken),
+    h('details', null, h('summary', null, 'Other clients'),
+      field('MCP URL', h('code', null, lastConnection.url)),
+      field('Header', h('div', { class: 'secret' }, 'Authorization: Bearer ' + lastConnection.token)), copyButton(lastConnection.token, 'Copy token'))) : null;
+  const rows = (connections || []).map((c) => h('tr', null,
+    h('td', null, c.label), h('td', null, c.scope === 'write' ? 'Read & write' : 'Read only'),
+    h('td', null, `…${c.tokenHint}`), h('td', null, `${minutesLeft(c.expiresAt)} min left`),
+    h('td', null, c.lastUsedAt ? new Date(c.lastUsedAt).toLocaleTimeString() : '–'),
+    h('td', null, h('button', { type: 'button', onclick: () => run(async () => { await api('/connections/' + c.id, 'DELETE'); connections = null; if (lastConnection && lastConnection.connection.id === c.id) lastConnection = null; }, 'Token revoked') }, 'Revoke'))));
+  return [h('h2', null, 'Connections'),
+    h('div', { class: 'acct' }, form),
+    created,
+    h('h3', null, 'Active tokens'),
+    rows.length ? h('table', { class: 'tbl' }, h('thead', null, h('tr', null, ...['Name', 'Access', 'Token', 'Expires', 'Last used', ''].map((t) => h('th', null, t)))), h('tbody', null, ...rows)) : h('p', { class: 'muted' }, 'None.'),
+    h('details', null, h('summary', null, 'What this is'),
+      h('p', null, 'Lets an AI client (Claude Code, a ChatGPT connector) list, read, export, import and edit assistants and run their tests through /assistants/mcp. Tokens expire after 15 or 30 minutes and never reach provider keys, CLI logins or website tokens.'))];
+}
+
+/* ---------- GitHub sync: assistants <-> private repo, run by the server ---------- */
+let gh = null;
+function when(iso) { return iso ? new Date(iso).toLocaleString() : 'never'; }
+function githubView() {
+  if (!gh) api('/github').then((d) => { gh = d; if (view === 'github') render(); }).catch(() => { gh = { error: true }; });
+  if (!gh || gh.error) return [h('h2', null, 'GitHub sync'), h('p', { class: 'muted' }, gh ? 'Could not load.' : 'Loading…')];
+  const repo = h('input', { value: gh.repo, placeholder: 'owner/repo', maxlength: 201 });
+  const branch = h('input', { value: gh.branch, maxlength: 100 });
+  const token = h('input', { type: 'password', autocomplete: 'off', placeholder: gh.tokenSet ? `Saved (…${gh.tokenHint}); enter a new one to replace` : 'Fine-grained token: Contents read & write on this repo only' });
+  const push = h('input', { type: 'checkbox' }); push.checked = gh.pushOnSave;
+  const pull = h('input', { type: 'checkbox' }); pull.checked = gh.pullOnWebhook;
+  const chats = h('input', { type: 'checkbox' }); chats.checked = gh.syncChats;
+  const st = gh.status || {};
+  const save = h('form', { onsubmit: (e) => {
+    e.preventDefault();
+    const body = { repo: repo.value.trim(), branch: branch.value.trim() || 'main', pushOnSave: push.checked, pullOnWebhook: pull.checked, syncChats: chats.checked };
+    if (token.value.trim()) body.token = token.value.trim();
+    run(async () => { gh = await api('/github', 'PUT', body); }, 'GitHub sync saved');
+  } },
+    h('div', { class: 'row' }, field('Repository', repo), field('Branch', branch)),
+    field('Access token', token),
+    h('div', { class: 'row' },
+      h('label', null, push, ' Commit changes made in AJMCP'),
+      h('label', null, pull, ' Import pushes from GitHub (webhook)'),
+      h('label', null, chats, ' Also save chat transcripts (customer data)')),
+    h('button', { type: 'submit' }, 'Save'));
+  const actions = h('div', { class: 'row' },
+    h('button', { type: 'button', onclick: () => run(async () => { const r = await api('/github/push-all', 'POST'); gh = r; if (!r.ok) throw new Error(r.error); }, 'Pushed') }, 'Push all to GitHub'),
+    h('button', { type: 'button', onclick: () => run(async () => { const r = await api('/github/pull-all', 'POST'); gh = r; if (!r.ok) throw new Error(r.error); }, 'Pulled') }, 'Pull all from GitHub'));
+  const webhook = h('div', { class: 'acct' },
+    field('Webhook URL (GitHub › repo Settings › Webhooks › Add: content type application/json, push events)', h('code', null, gh.webhookUrl)), copyButton(gh.webhookUrl),
+    h('p', null, gh.webhookSet ? 'Webhook secret is set.' : 'No webhook secret yet.'),
+    h('button', { type: 'button', onclick: () => run(async () => { const r = await api('/github/secret', 'POST'); gh = r; notice = { kind: 'ok', text: 'Paste this secret into the GitHub webhook (shown once):', secret: r.secret }; }) }, gh.webhookSet ? 'Replace webhook secret' : 'Create webhook secret'));
+  const lastPush = st.lastPush ? `${when(st.lastPush.at)}: ${st.lastPush.committed ? `commit ${st.lastPush.commit}, ${st.lastPush.files} files` : 'no changes'}` : 'never';
+  const lastPull = st.lastPull ? `${when(st.lastPull.at)}: imported ${st.lastPull.imported.length}, unchanged ${st.lastPull.unchanged.length}` : 'never';
+  return [h('h2', null, 'GitHub sync'),
+    h('div', { class: 'acct' }, save),
+    actions,
+    h('div', { class: 'facts' }, field('Last push', h('span', null, lastPush)), field('Last pull', h('span', null, lastPull)),
+      gh.syncChats ? field('Last chat commit', h('span', null, st.lastChats ? `${when(st.lastChats.at)}: ${st.lastChats.files} files` : 'none yet')) : null),
+    st.lastError ? h('div', { class: 'notice err' }, st.lastError) : null,
+    (st.rejected || []).length ? h('div', { class: 'notice err' }, 'Rejected from GitHub: ' + st.rejected.map((r) => `${r.id} (${words(r.error)})`).join(', ')) : null,
+    (st.unknownFolders || []).length ? h('div', { class: 'notice' }, 'Folders with no matching assistant (create it here first): ' + st.unknownFolders.join(', ')) : null,
+    h('h3', null, 'Webhook'), webhook,
+    h('details', null, h('summary', null, 'How it works'),
+      h('p', null, 'One folder per assistant (<id>/), the same files as an export. Changes saved in AJMCP are committed a few seconds later; pushes to the branch are imported after validation (a folder is the whole assistant, including all manual knowledge). A package that fails validation is rejected and the assistant is left as it was. Folders without a matching assistant are reported, not created.'))];
+}
+
 async function signOut() {
   try { await api('/logout', 'POST'); } catch { /* already out */ }
   state = null; renderLogin();
@@ -963,7 +1048,7 @@ function topbar() {
   menu.append(
     h('button', { type: 'button', 'aria-haspopup': 'menu', onclick: () => menu.classList.toggle('open') }, '⚙ Settings'),
     h('div', { class: 'drop' }, h('div', { class: 'drop-in', role: 'menu' },
-      item('dashboard', 'Dashboard'), item('providers', 'AI Providers'), h('hr'), item('account', 'Account'))));
+      item('dashboard', 'Dashboard'), item('providers', 'AI Providers'), item('connections', 'Connections'), item('github', 'GitHub sync'), h('hr'), item('account', 'Account'))));
   return h('header', { class: 'topbar' },
     h('h1', null, h('a', { href: location.pathname, title: 'Dashboard', onclick: (e) => { e.preventDefault(); sel.add = false; go('dashboard'); } }, 'AJMCP Admin')),
     h('span', { class: 'who' }, `v${state.version} · ${state.user}`),

@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { tokenHash } from './auth.js';
 import { LIMITS } from './knowledge.js';
 import { MASTER_PROVIDERS, emptyMaster } from './master.js';
+import { siteToPackage } from './package.js';
 
 export class StoreError extends Error {
   constructor(code, status = 400) { super(code); this.name = 'StoreError'; this.code = code; this.status = status; }
@@ -40,6 +41,35 @@ function cleanSite(input, existing = {}) {
   if (!transferTargets.every((t) => ID_RE.test(t))) throw new StoreError('invalid_transfer_targets');
   const tests = cleanTests(input.tests ?? existing.tests ?? []);
   return { provider, model, systemPrompt, tests, leadCapture: Boolean(input.leadCapture ?? existing.leadCapture), leadInstructions, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback, routeLabel, transferTargets };
+}
+
+// Assistant-management connection tokens (for /assistants/mcp). Short-lived on purpose: 15 minutes by default,
+// 30 at most. Stored as hashes; the token is shown once. Expired tokens are dropped on the next read/write.
+export const CONNECTION_SCOPES = ['read', 'write'];
+export const CONNECTION_MINUTES = [15, 30];
+const live = (c) => c.expiresAt && Date.parse(c.expiresAt) > Date.now();
+function cleanConnections(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 20).map((c) => ({
+    id: String(c.id), label: String(c.label || '').slice(0, 40), scope: c.scope === 'write' ? 'write' : 'read',
+    tokenHash: String(c.tokenHash || ''), tokenHint: String(c.tokenHint || ''), createdAt: c.createdAt || null,
+    expiresAt: c.expiresAt || null, lastUsedAt: c.lastUsedAt || null
+  })).filter((c) => c.id && /^[0-9a-f]{64}$/.test(c.tokenHash) && live(c));
+}
+
+// GitHub sync settings (see github-sync.js). The token and webhook secret stay in settings.json (mode 600).
+const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
+const BRANCH_RE = /^[A-Za-z0-9._/-]{1,100}$/;
+function cleanGithub(raw = {}) {
+  return {
+    repo: REPO_RE.test(String(raw.repo || '')) ? String(raw.repo) : '',
+    branch: BRANCH_RE.test(String(raw.branch || '')) ? String(raw.branch) : 'main',
+    token: String(raw.token || ''),
+    webhookSecret: /^[0-9a-f]{32,128}$/.test(String(raw.webhookSecret || '')) ? String(raw.webhookSecret) : '',
+    pushOnSave: raw.pushOnSave !== false,
+    pullOnWebhook: raw.pullOnWebhook !== false,
+    syncChats: Boolean(raw.syncChats)
+  };
 }
 
 // The master switch as stored: '' (off) or one of claude | codex | antigravity, with an optional model per provider.
@@ -107,7 +137,8 @@ export class SettingsStore {
     this.file = config.dataDir ? join(config.dataDir, 'settings.json') : '';
     this.env = { openai: config.openaiApiKey, anthropic: config.anthropicApiKey, claude: config.claudeOauthToken, copilot: config.copilotToken, passwordHash: config.adminPasswordHash };
     this.envMaster = { provider: config.master ? config.master.provider : '', models: { ...emptyMaster().models, ...(config.master ? config.master.models : {}) } };
-    this.state = { sites: undefined, keys: {}, passwordHash: '', passwordBase: '', master: undefined, timeouts: {} };
+    this.state = { sites: undefined, keys: {}, passwordHash: '', passwordBase: '', master: undefined, timeouts: {}, connections: [], github: cleanGithub() };
+    this.onSitesChanged = null;   // (ids, reason) => void; set by the GitHub sync
   }
 
   get enabled() { return Boolean(this.file); }
@@ -123,7 +154,9 @@ export class SettingsStore {
       passwordHash: String(data.passwordHash || ''),
       passwordBase: String(data.passwordBase || ''),
       master: data.master && typeof data.master === 'object' ? cleanMaster(data.master) : undefined,
-      timeouts: cleanTimeouts(data.timeouts)
+      timeouts: cleanTimeouts(data.timeouts),
+      connections: cleanConnections(data.connections),
+      github: cleanGithub(data.github)
     };
     this.apply();
   }
@@ -146,14 +179,24 @@ export class SettingsStore {
     try {
       mkdirSync(this.config.dataDir, { recursive: true });
       const tmp = `${this.file}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ sites: next.sites, keys: next.keys, passwordHash: next.passwordHash, passwordBase: next.passwordBase, master: next.master, timeouts: next.timeouts }, null, 2) + '\n', { mode: 0o600 });
+      writeFileSync(tmp, JSON.stringify({ sites: next.sites, keys: next.keys, passwordHash: next.passwordHash, passwordBase: next.passwordBase, master: next.master, timeouts: next.timeouts, connections: next.connections || [], github: next.github || cleanGithub() }, null, 2) + '\n', { mode: 0o600 });
       renameSync(tmp, this.file);
     } catch (error) {
       if (error instanceof StoreError) throw error;
       throw new StoreError('storage_unavailable', 503);
     }
+    const before = this.state.sites || this.config.sites;
     this.state = next;
     this.apply();
+    this.notifySitesChanged(before, next.sites);
+  }
+
+  /** Tells the GitHub sync which assistants' package files changed (or appeared) with this write. */
+  notifySitesChanged(before, after) {
+    if (!this.onSitesChanged || !Array.isArray(after)) return;
+    const old = new Map((before || []).map((s) => [s.id, JSON.stringify(siteToPackage(toStored(s)))]));
+    const ids = after.filter((s) => old.get(s.id) !== JSON.stringify(siteToPackage(s))).map((s) => s.id);
+    if (ids.length) { try { this.onSitesChanged(ids, this.writeReason || 'save'); } catch { /* sync is best effort */ } }
   }
 
   sites() { return (this.state.sites || this.config.sites).map(toStored); }
@@ -264,6 +307,95 @@ export class SettingsStore {
     sites[index] = { ...sites[index], knowledge: [...keep, ...next] };
     this.write({ ...this.state, sites });
     return { count: next.length, removed: [...previous.keys()].filter((r) => !seen.has(r)).length };
+  }
+
+  /**
+   * Applies a parsed assistant package in ONE write: the given fields (validated exactly like the admin form)
+   * and, when `knowledge` is an array, it replaces every manual document. Website-synced documents stay.
+   * Throws (and changes nothing) if any limit is exceeded.
+   */
+  importPackage(id, { fields = {}, knowledge } = {}, { dryRun = false, source = '' } = {}) {
+    const sites = this.sites();
+    const index = sites.findIndex((s) => s.id === id);
+    if (index < 0) throw new StoreError('site_not_found', 404);
+    const site = sites[index];
+    const cleaned = cleanSite(fields, site);
+    cleaned.transferTargets = cleaned.transferTargets.filter((t) => t !== id);
+    let docs = site.knowledge;
+    if (Array.isArray(knowledge)) {
+      const now = new Date().toISOString();
+      const previous = new Map(site.knowledge.filter((d) => d.source !== 'website').map((d) => [d.title.toLowerCase(), d]));
+      const manual = knowledge.map((input) => {
+        const title = String(input.title || '').trim().slice(0, 120);
+        const text = String(input.text || '').replace(/\r\n/g, '\n').trim();
+        if (!title) throw new StoreError('title_required');
+        if (!text) throw new StoreError('text_required');
+        if (text.length > LIMITS.docChars) throw new StoreError('document_too_large', 413);
+        const old = previous.get(title.toLowerCase());   // same title keeps its id (and date, if unchanged)
+        return { id: old ? old.id : randomBytes(6).toString('hex'), title, text, source: 'manual', ref: '', updatedAt: old && old.text === text ? old.updatedAt : now };
+      });
+      docs = [...site.knowledge.filter((d) => d.source === 'website'), ...manual];
+      if (docs.length > LIMITS.docs) throw new StoreError('too_many_documents');
+      if (docs.reduce((n, d) => n + d.text.length, 0) > LIMITS.totalChars) throw new StoreError('knowledge_full', 413);
+    }
+    const next = { ...site, ...cleaned, knowledge: docs };
+    if (dryRun) return next;   // fully validated, nothing written
+    sites[index] = next;
+    this.writeReason = source || 'import';
+    try { this.write({ ...this.state, sites }); } finally { this.writeReason = ''; }
+    return next;
+  }
+
+  githubSettings() { return { ...(this.state.github || cleanGithub()) }; }
+
+  /** Saves GitHub sync settings. token: undefined keeps it, null/'' clears it. */
+  setGithub(input) {
+    const current = this.githubSettings();
+    const token = input.token === undefined ? current.token : String(input.token || '').trim();
+    if (token && (token.length < 20 || token.length > 300 || /\s/.test(token))) throw new StoreError('invalid_github_token');
+    const repo = input.repo === undefined ? current.repo : String(input.repo || '').trim();
+    if (repo && !REPO_RE.test(repo)) throw new StoreError('invalid_github_repo');
+    const branch = input.branch === undefined ? current.branch : String(input.branch || '').trim() || 'main';
+    if (!BRANCH_RE.test(branch)) throw new StoreError('invalid_github_branch');
+    const next = cleanGithub({ ...current, ...input, repo, branch, token, webhookSecret: input.webhookSecret ?? current.webhookSecret });
+    this.write({ ...this.state, sites: this.state.sites ?? this.sites(), github: next });
+    return next;
+  }
+
+  /** Unexpired connection tokens. */
+  connections() { return (this.state.connections || []).filter(live).map((c) => ({ ...c })); }
+
+  /** New assistant-management token (shown once). scope: read | write; minutes: 15 (default) or 30. */
+  addConnection(label, scope, minutes = 15) {
+    const name = String(label || '').trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}$/.test(name)) throw new StoreError('invalid_token_label');
+    if (!CONNECTION_SCOPES.includes(scope)) throw new StoreError('invalid_scope');
+    const lifetime = Number(minutes);
+    if (!CONNECTION_MINUTES.includes(lifetime)) throw new StoreError('invalid_lifetime');
+    const list = this.connections();
+    if (list.length >= 20) throw new StoreError('too_many_tokens');
+    const token = `ajmcp_${randomBytes(32).toString('hex')}`;
+    const now = Date.now();
+    const entry = { id: randomBytes(6).toString('hex'), label: name, scope, tokenHash: tokenHash(token), tokenHint: token.slice(-4), createdAt: new Date(now).toISOString(), expiresAt: new Date(now + lifetime * 60_000).toISOString(), lastUsedAt: null };
+    this.write({ ...this.state, sites: this.state.sites ?? this.sites(), connections: [...list, entry] });
+    return { token, entry };
+  }
+
+  removeConnection(connectionId) {
+    const list = this.connections();
+    if (!list.some((c) => c.id === connectionId)) throw new StoreError('token_not_found', 404);
+    this.write({ ...this.state, sites: this.state.sites ?? this.sites(), connections: list.filter((c) => c.id !== connectionId) });
+  }
+
+  /** Records when a connection token was last used (at most once a minute, to keep writes rare). */
+  touchConnection(connectionId) {
+    const list = this.connections();
+    const at = list.findIndex((c) => c.id === connectionId);
+    if (at < 0) return;
+    const last = list[at].lastUsedAt ? Date.parse(list[at].lastUsedAt) : 0;
+    if (Date.now() - last < 60_000) return;
+    list[at] = { ...list[at], lastUsedAt: new Date().toISOString() };
+    try { this.write({ ...this.state, sites: this.state.sites ?? this.sites(), connections: list }); } catch { /* best effort */ }
   }
 
   removeDoc(id, docId) {

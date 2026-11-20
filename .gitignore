@@ -8,3 +8,6 @@ node_modules/
 *.local.json
 secrets/
 sites.json
+
+# Assistant content (business instructions, knowledge, ChatGPT project files): local only, never pushed (repo is public).
+/assistants/
