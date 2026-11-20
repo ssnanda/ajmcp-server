@@ -8,7 +8,7 @@
 //                     fails validation is rejected and reported; the assistant stays as it was.
 //
 // Loop safety: our commits carry COMMIT_MARK and webhooks for them are skipped; content comparison stops any echo.
-// Folders without a matching assistant are reported, never created (creating one issues a website token).
+// A folder without a matching assistant creates it (no website token is handed out; create one under Access).
 import { createHash, createHmac, timingSafeEqual, randomBytes } from 'node:crypto';
 import { siteToPackage, parsePackage } from './package.js';
 
@@ -76,6 +76,23 @@ export class GitHubSync {
     // The first check after a restart also pulls: anything committed while the server was down is picked up.
     await this.serial(() => this.pull([]));
     if (!first) this.status.lastPoll.pulled = true;
+  }
+
+  /**
+   * When an assistant has no assistantVersion, take it from the latest commit message for its folder that reads
+   * "<id> x.y.z: ..." (how ChatGPT labels changes). Saved normally, so the version is then committed into
+   * <id>-assistant.json and the repo carries it from then on. Returns the version adopted, or ''.
+   */
+  async adoptCommitVersion(id) {
+    try {
+      const commits = await this.history(id, 10);
+      const pattern = new RegExp(`^${id.replace(/[-_]/g, '[-_]')}\\s+v?(\\d{1,4}\\.\\d{1,4}\\.\\d{1,6})\\b`, 'i');
+      for (const c of commits) {
+        const match = pattern.exec(c.message);
+        if (match) { this.store.updateSite(id, { assistantVersion: match[1] }); return match[1]; }
+      }
+    } catch { /* best effort */ }
+    return '';
   }
 
   /** Recent commits touching one assistant's folder: [{ sha, date, author, message }]. */
@@ -273,13 +290,28 @@ export class GitHubSync {
       (folders[id] ||= {})[path.slice(slash + 1)] = sha;
     }
     const sites = new Map(this.store.sites().map((s) => [s.id, s]));
-    const result = { imported: [], unchanged: [], rejected: [], unknown: [] };
+    const result = { imported: [], unchanged: [], rejected: [], unknown: [], created: [], versioned: [] };
     for (const [id, files] of Object.entries(folders)) {
-      const site = sites.get(id);
-      if (!site) { result.unknown.push(id); continue; }
+      let site = sites.get(id);
+      if (!site) {
+        // A new assistant folder (e.g. written by ChatGPT): create the assistant, then import its files below.
+        // Its own transferTargets are kept as written (none if absent), so other assistants are not changed.
+        // It has no website connection until a token is created for it under Access.
+        if (!/^[a-z0-9][a-z0-9-_]{1,63}$/.test(id) || !files[`${id}-assistant.json`]) { result.unknown.push(id); continue; }
+        try {
+          const meta = parsePackage({ [`${id}-assistant.json`]: Buffer.from(String((await this.api('GET', `/git/blobs/${files[`${id}-assistant.json`]}`)).content || ''), 'base64').toString('utf8') });
+          ({ site } = this.store.addSite({ id, transferTargets: meta.fields.transferTargets || [], leadCapture: meta.fields.leadCapture ?? true }));
+          result.created.push(id);
+        } catch (error) { result.rejected.push({ id, error: `create_failed: ${String(error.code || error.message)}` }); continue; }
+      }
       const current = siteToPackage(site);
       const same = Object.keys(files).length === Object.keys(current).length && Object.entries(files).every(([name, sha]) => current[name] !== undefined && blobSha(current[name]) === sha);
-      if (same) { result.unchanged.push(id); continue; }
+      if (same) {
+        // Versions written only in commit messages ("<id> 0.0.1: ..."): adopt the latest one once.
+        if (!site.assistantVersion && await this.adoptCommitVersion(id)) result.versioned.push(id);
+        else result.unchanged.push(id);
+        continue;
+      }
       const contents = {};
       for (const [name, sha] of Object.entries(files)) {
         const blob = await this.api('GET', `/git/blobs/${sha}`);
@@ -290,12 +322,14 @@ export class GitHubSync {
         // The folder is the whole assistant: knowledge is always the complete manual set (possibly empty).
         this.store.importPackage(id, { fields: pickFields(parsed.fields), knowledge: parsed.knowledge }, { source: 'github' });
         result.imported.push(id);
+        if (!parsed.fields.assistantVersion && !site.assistantVersion && await this.adoptCommitVersion(id)) result.versioned.push(id);
       } catch (error) {
         result.rejected.push({ id, error: String(error.code || error.message) });
       }
     }
     this.status.lastPull = { at: new Date().toISOString(), ...result };
     this.status.unknownFolders = result.unknown;
+    this.status.created = result.created;
     this.status.rejected = result.rejected;
     if (!result.rejected.length) this.status.lastError = '';
     return result;
