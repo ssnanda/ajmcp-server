@@ -167,7 +167,7 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
         if (!connection) { status = 401; note.error = 'bad_or_expired_connection_token'; return json(res, status, { error: 'unauthorized' }, id); }
         note.site = 'connection'; note.via = `${connection.label} (${connection.scope})`;
         store.touchConnection(connection.id);
-        await handleAssistantMcp(req, res, { store, config, limiter, connection, fetchFn });
+        await handleAssistantMcp(req, res, { store, config, limiter, connection, fetchFn, github });
         status = res.statusCode; return;
       }
       if (!validateHost(req, config)) { status = 403; note.error = 'untrusted_origin_or_host'; note.host = String(req.headers.host || ''); return json(res, status, { error: 'untrusted_origin_or_host' }, id); }

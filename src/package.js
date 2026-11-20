@@ -44,7 +44,7 @@ function parseTests(text) {
 export function siteToPackage(site, name = '') {
   const id = site.id;
   const files = {};
-  const meta = { format: PACKAGE_FORMAT, version: PACKAGE_VERSION, id, name: name || id, leadCapture: Boolean(site.leadCapture), strict: site.strict !== false };
+  const meta = { format: PACKAGE_FORMAT, version: PACKAGE_VERSION, id, name: name || site.name || id, leadCapture: Boolean(site.leadCapture), strict: site.strict !== false };
   if (Array.isArray(site.transferTargets) && site.transferTargets.length) meta.transferTargets = [...site.transferTargets];
   files[`${id}-assistant.json`] = JSON.stringify(meta, null, 2) + '\n';
   if (site.systemPrompt) files[`${id}-01-ai-behavior-instructions.txt`] = site.systemPrompt.trim() + '\n';
@@ -90,6 +90,7 @@ export function parsePackage(files) {
   if (meta) {
     if (meta.format && meta.format !== PACKAGE_FORMAT) out.warnings.push(`unknown package format "${meta.format}"`);
     if (Number(meta.version || 1) > PACKAGE_VERSION) out.warnings.push(`package version ${meta.version} is newer than this server understands (${PACKAGE_VERSION})`);
+    if (typeof meta.name === 'string' && meta.name.trim() && meta.name.trim() !== meta.id) out.fields.name = meta.name.trim();
     if (typeof meta.leadCapture === 'boolean') out.fields.leadCapture = meta.leadCapture;
     if (typeof meta.strict === 'boolean') out.fields.strict = meta.strict;
     if (Array.isArray(meta.transferTargets)) out.fields.transferTargets = meta.transferTargets.map(String);

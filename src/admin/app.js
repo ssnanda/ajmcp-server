@@ -899,7 +899,9 @@ function activityContent() {
         e.purpose ? h('span', { class: 'pill purpose' }, words(e.purpose)) : null),
       h('td', { class: 'x' }, e.purpose ? words(e.purpose) : ROUTE_NAMES[e.route] || e.route, e.channel ? h('span', { class: 'meta' }, ' · ' + e.channel) : null),
       h('td', { class: 'x' }, modelsUsed.length ? modelsUsed.map((m, k) => [k ? ', ' : '', h('code', null, m)]).flat() : '—', e.provider ? h('span', { class: 'meta' }, ' · ' + e.provider) : null),
-      h('td', { class: 'x' }, e.sessionId != null ? '#' + e.sessionId : e.conversation ? h('code', { title: 'Chat id (no session sent by the client)' }, e.conversation) : '—', items.length > 1 ? h('span', { class: 'meta' }, ` · ${items.length} messages`) : (e.chars != null ? h('span', { class: 'meta' }, ` · ${e.chars} chars`) : null)),
+      h('td', { class: 'x' }, e.sessionId != null ? '#' + e.sessionId : e.conversation ? h('code', { title: 'Chat id (no session sent by the client)' }, e.conversation) : '—', items.length > 1 ? h('span', { class: 'meta' }, ` · ${items.length} messages`) : (e.chars != null ? h('span', { class: 'meta' }, ` · ${e.chars} chars`) : null),
+        // The customer, when the caller sent their details (name · email · phone).
+        (items.find((x) => x.visitor) || {}).visitor ? h('div', { class: 'meta', title: 'Customer' }, (items.find((x) => x.visitor)).visitor) : null),
       h('td', null, h('span', { class: 'pill ' + (e.running ? 'off' : bad ? 'bad' : 'on') }, e.running ? 'running…' : String(e.status))),
       h('td', null, took(e.ms)),
       h('td', { class: 'x' }, e.error ? words(e.error) + (e.host ? ` (${e.host})` : '') : (e.running ? '' : 'ok'), failed && !bad ? h('span', { class: 'meta' }, ` · ${failed} failed earlier`) : null,
@@ -990,29 +992,49 @@ function connectionsView() {
 
 /* ---------- GitHub sync: assistants <-> private repo, run by the server ---------- */
 let gh = null;
+let ghTags = null;   // [{ name, commit, url }] or { error }
+// What has been typed but not saved yet. The page re-renders as data arrives (models, activity, etc.); without this
+// a re-render rebuilt the inputs empty and Save then stored blank values.
+const ghDraft = {};
 function when(iso) { return iso ? new Date(iso).toLocaleString() : 'never'; }
 function githubView() {
   if (!gh) api('/github').then((d) => { gh = d; if (view === 'github') render(); }).catch(() => { gh = { error: true }; });
   if (!gh || gh.error) return [h('h2', null, 'GitHub sync'), h('p', { class: 'muted' }, gh ? 'Could not load.' : 'Loading…')];
-  const repo = h('input', { value: gh.repo, placeholder: 'owner/repo', maxlength: 201 });
-  const branch = h('input', { value: gh.branch, maxlength: 100 });
-  const token = h('input', { type: 'password', autocomplete: 'off', placeholder: gh.tokenSet ? `Saved (…${gh.tokenHint}); enter a new one to replace` : 'Fine-grained token: Contents read & write on this repo only' });
-  const push = h('input', { type: 'checkbox' }); push.checked = gh.pushOnSave;
-  const pull = h('input', { type: 'checkbox' }); pull.checked = gh.pullOnWebhook;
-  const chats = h('input', { type: 'checkbox' }); chats.checked = gh.syncChats;
+  const keep = (key) => (e) => { ghDraft[key] = e.target.value; };
+  const repo = h('input', { value: ghDraft.repo ?? gh.repo, placeholder: 'ssnanda/ajmcp-assistants or its GitHub URL', maxlength: 300, oninput: keep('repo') });
+  const branch = h('input', { value: ghDraft.branch ?? gh.branch, maxlength: 100, oninput: keep('branch') });
+  const token = h('input', { type: 'password', autocomplete: 'new-password', value: ghDraft.token ?? '', oninput: keep('token'), placeholder: gh.tokenSet ? `Saved (…${gh.tokenHint}); enter a new one to replace` : 'Fine-grained token: Contents read & write on this repo only' });
+  const box = (on) => { const c = h('input', { type: 'checkbox', style: 'width:auto;height:auto;margin:0 6px 0 0' }); c.checked = on; return c; };
+  const push = box(gh.pushOnSave);
+  const pull = box(gh.pullOnWebhook);
+  const chats = box(gh.syncChats);
+  const check = (c, text) => h('label', { style: 'display:flex;align-items:center;font-weight:400;margin:4px 16px 4px 0' }, c, text);
   const st = gh.status || {};
   const save = h('form', { onsubmit: (e) => {
     e.preventDefault();
     const body = { repo: repo.value.trim(), branch: branch.value.trim() || 'main', pushOnSave: push.checked, pullOnWebhook: pull.checked, syncChats: chats.checked };
     if (token.value.trim()) body.token = token.value.trim();
-    run(async () => { gh = await api('/github', 'PUT', body); }, 'GitHub sync saved');
+    if (!body.repo) { notice = { kind: 'err', text: 'Enter the repository, e.g. ssnanda/ajmcp-assistants or its GitHub URL.' }; render(); return; }
+    if (!gh.tokenSet && !body.token) { notice = { kind: 'err', text: 'Paste the access token (see "Which token to create").' }; render(); return; }
+    run(async () => {
+      gh = await api('/github', 'PUT', body);
+      for (const k of Object.keys(ghDraft)) delete ghDraft[k];
+      if (!gh.repo || !gh.tokenSet) throw new Error('Not saved: repository or token missing');
+    }, 'GitHub sync saved');
   } },
-    h('div', { class: 'row' }, field('Repository', repo), field('Branch', branch)),
+    h('div', { class: 'row' }, field('Repository (owner/repo or GitHub URL)', repo), field('Branch', branch)),
     field('Access token', token),
-    h('div', { class: 'row' },
-      h('label', null, push, ' Commit changes made in AJMCP'),
-      h('label', null, pull, ' Import pushes from GitHub (webhook)'),
-      h('label', null, chats, ' Also save chat transcripts (customer data)')),
+    h('details', null, h('summary', null, 'Which token to create'),
+      h('ul', null,
+        h('li', null, 'GitHub › Settings › Developer settings › Personal access tokens › Fine-grained tokens › Generate new token.'),
+        h('li', null, 'Repository access: Only select repositories › ', h('code', null, gh.repo || 'owner/repo'), '.'),
+        h('li', null, 'Repository permissions: Contents › Read and write. Metadata › Read-only is added automatically.'),
+        h('li', null, 'Everything else: No access (no Webhooks, no account permissions).'),
+        h('li', null, 'Expiration: your choice (e.g. 90 days). When it expires, a github 401 error appears here; paste a new token in this field.'))),
+    h('div', { style: 'display:flex;flex-wrap:wrap;margin:6px 0 10px' },
+      check(push, 'Commit changes made in AJMCP'),
+      check(pull, 'Import pushes from GitHub (webhook)'),
+      check(chats, 'Also save chat transcripts (customer data)')),
     h('button', { type: 'submit' }, 'Save'));
   const actions = h('div', { class: 'row' },
     h('button', { type: 'button', onclick: () => run(async () => { const r = await api('/github/push-all', 'POST'); gh = r; if (!r.ok) throw new Error(r.error); }, 'Pushed') }, 'Push all to GitHub'),
@@ -1031,9 +1053,34 @@ function githubView() {
     st.lastError ? h('div', { class: 'notice err' }, st.lastError) : null,
     (st.rejected || []).length ? h('div', { class: 'notice err' }, 'Rejected from GitHub: ' + st.rejected.map((r) => `${r.id} (${words(r.error)})`).join(', ')) : null,
     (st.unknownFolders || []).length ? h('div', { class: 'notice' }, 'Folders with no matching assistant (create it here first): ' + st.unknownFolders.join(', ')) : null,
+    h('h3', null, 'Versions'), versionsPanel(),
     h('h3', null, 'Webhook'), webhook,
     h('details', null, h('summary', null, 'How it works'),
       h('p', null, 'One folder per assistant (<id>/), the same files as an export. Changes saved in AJMCP are committed a few seconds later; pushes to the branch are imported after validation (a folder is the whole assistant, including all manual knowledge). A package that fails validation is rejected and the assistant is left as it was. Folders without a matching assistant are reported, not created.'))];
+}
+
+function versionsPanel() {
+  if (!gh || !gh.repo || !gh.tokenSet) return h('p', { class: 'muted' }, 'Save the repository and token first.');
+  if (!ghTags) api('/github/tags').then((d) => { ghTags = d.ok ? d.tags : { error: d.error }; if (view === 'github') render(); }).catch(() => { ghTags = { error: 'could not load' }; });
+  const today = new Date().toISOString().slice(0, 10);
+  const name = h('input', { value: ghDraft.tagName ?? `v${today}`, maxlength: 100, oninput: (e) => { ghDraft.tagName = e.target.value; } });
+  const message = h('input', { value: ghDraft.tagMessage ?? '', maxlength: 2000, placeholder: 'What this version is, e.g. "New VO pricing live"', oninput: (e) => { ghDraft.tagMessage = e.target.value; } });
+  const form = h('form', { onsubmit: (e) => {
+    e.preventDefault();
+    run(async () => {
+      const r = await api('/github/tags', 'POST', { name: name.value.trim(), message: message.value.trim() });
+      if (!r.ok) throw new Error(words(r.error));
+      ghTags = r.tags; delete ghDraft.tagName; delete ghDraft.tagMessage;
+    }, 'Version tagged');
+  } }, h('div', { class: 'row' }, field('Tag', name), field('Note', message)), h('button', { type: 'submit' }, 'Tag current version'));
+  const list = !ghTags ? h('p', { class: 'muted' }, 'Loading…')
+    : ghTags.error ? h('div', { class: 'notice err' }, words(ghTags.error))
+    : ghTags.length ? h('table', { class: 'tbl' }, h('thead', null, h('tr', null, h('th', null, 'Tag'), h('th', null, 'Commit'))),
+      h('tbody', null, ...ghTags.slice(0, 15).map((t) => h('tr', null, h('td', null, h('a', { href: t.url, target: '_blank', rel: 'noopener' }, t.name)), h('td', null, h('code', null, t.commit))))))
+    : h('p', { class: 'muted' }, 'No versions yet.');
+  return h('div', { class: 'acct' }, form, list,
+    h('details', null, h('summary', null, 'About versions'),
+      h('p', null, 'A tag marks the repo as it is now (every assistant), so you can go back to it on GitHub. Changes still waiting to be committed are pushed first. Tag names: letters, numbers, dots, dashes, slashes, e.g. v2026-11-20 or ncllcagents-v3.')));
 }
 
 async function signOut() {

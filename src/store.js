@@ -40,7 +40,9 @@ function cleanSite(input, existing = {}) {
   const transferTargets = [...new Set(rawTargets.map((t) => String(t).trim()))];
   if (!transferTargets.every((t) => ID_RE.test(t))) throw new StoreError('invalid_transfer_targets');
   const tests = cleanTests(input.tests ?? existing.tests ?? []);
-  return { provider, model, systemPrompt, tests, leadCapture: Boolean(input.leadCapture ?? existing.leadCapture), leadInstructions, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback, routeLabel, transferTargets };
+  // Display name (e.g. "NC LLC Agents Inc."), carried in the package's assistant.json; '' = use the id.
+  const name = String(input.name ?? existing.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 80);
+  return { name, provider, model, systemPrompt, tests, leadCapture: Boolean(input.leadCapture ?? existing.leadCapture), leadInstructions, disabled: Boolean(input.disabled ?? existing.disabled), strict: Boolean(input.strict ?? existing.strict ?? true), fallback, routeLabel, transferTargets };
 }
 
 // Assistant-management connection tokens (for /assistants/mcp). Short-lived on purpose: 15 minutes by default,
@@ -107,6 +109,7 @@ function toStored(site) {
     id: site.id,
     tokenHash: site.tokenHash || tokenHash(site.token),
     tokenHint: site.tokenHint || String(site.token || '').slice(-4),
+    name: site.name ? String(site.name).slice(0, 80) : '',
     provider: site.provider || 'openai',
     model: site.model || '',
     systemPrompt: site.systemPrompt || '',
@@ -353,7 +356,9 @@ export class SettingsStore {
     const current = this.githubSettings();
     const token = input.token === undefined ? current.token : String(input.token || '').trim();
     if (token && (token.length < 20 || token.length > 300 || /\s/.test(token))) throw new StoreError('invalid_github_token');
-    const repo = input.repo === undefined ? current.repo : String(input.repo || '').trim();
+    // Accepts owner/repo, https://github.com/owner/repo(.git), git@github.com:owner/repo.git
+    const repo = input.repo === undefined ? current.repo : String(input.repo || '').trim()
+      .replace(/^git@github\.com:/i, '').replace(/^https?:\/\/(www\.)?github\.com\//i, '').replace(/\.git$/i, '').replace(/\/+$/, '');
     if (repo && !REPO_RE.test(repo)) throw new StoreError('invalid_github_repo');
     const branch = input.branch === undefined ? current.branch : String(input.branch || '').trim() || 'main';
     if (!BRANCH_RE.test(branch)) throw new StoreError('invalid_github_branch');

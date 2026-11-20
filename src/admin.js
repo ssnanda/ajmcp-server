@@ -431,6 +431,19 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
       store.setGithub({ webhookSecret: secret });
       return send(res, 200, { secret, ...githubView(req.headers.host) });
     }
+    // Version tags on the assistants repo.
+    if ((method === 'GET' || method === 'POST') && path === '/admin/api/github/tags') {
+      if (!github || !github.configured) throw new AdminError('github_not_configured', 409);
+      try {
+        if (method === 'POST') {
+          const tag = await github.createTag(body.name, body.message);
+          return send(res, 201, { ok: true, tag, tags: await github.listTags() });
+        }
+        return send(res, 200, { ok: true, tags: await github.listTags() });
+      } catch (error) {
+        return send(res, 200, { ok: false, error: String(error.message || error) });
+      }
+    }
     if (method === 'POST' && (path === '/admin/api/github/push-all' || path === '/admin/api/github/pull-all')) {
       if (!github || !github.configured) throw new AdminError('github_not_configured', 409);
       try {

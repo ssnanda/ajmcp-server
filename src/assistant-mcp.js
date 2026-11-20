@@ -32,7 +32,7 @@ export function connectionTokenFrom(req, path) {
   return path.startsWith('/assistants/mcp/') && !segment.includes('/') ? segment : '';
 }
 
-const EDITABLE = ['systemPrompt', 'routeLabel', 'leadCapture', 'leadInstructions', 'fallback', 'strict', 'transferTargets', 'tests'];
+const EDITABLE = ['name', 'systemPrompt', 'routeLabel', 'leadCapture', 'leadInstructions', 'fallback', 'strict', 'transferTargets', 'tests'];
 const pick = (input) => Object.fromEntries(EDITABLE.filter((k) => input[k] !== undefined).map((k) => [k, input[k]]));
 const text = (value) => ({ content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) }] });
 const fail = (code) => ({ isError: true, content: [{ type: 'text', text: String(code) }] });
@@ -76,7 +76,7 @@ function diff(before, after) {
   return { fields, knowledge };
 }
 
-export async function handleAssistantMcp(req, res, { store, config, limiter, connection, fetchFn = fetch }) {
+export async function handleAssistantMcp(req, res, { store, config, limiter, connection, fetchFn = fetch, github = null }) {
   const [{ McpServer }, { NodeStreamableHTTPServerTransport }, z] = await Promise.all([
     import('@modelcontextprotocol/server'),
     import('@modelcontextprotocol/node/streamableHttp'),
@@ -129,7 +129,7 @@ export async function handleAssistantMcp(req, res, { store, config, limiter, con
     description: 'Change one or more fields of an assistant. Limits: systemPrompt 12,000 chars, routeLabel 200, leadInstructions 4,000, fallback 500, tests 30 (question 300, expected 500), transferTargets 10 assistant ids.',
     inputSchema: z.object({
       id,
-      systemPrompt: z.string().optional(), routeLabel: z.string().optional(), leadCapture: z.boolean().optional(),
+      name: z.string().max(80).optional(), systemPrompt: z.string().optional(), routeLabel: z.string().optional(), leadCapture: z.boolean().optional(),
       leadInstructions: z.string().optional(), fallback: z.string().optional(), strict: z.boolean().optional(),
       transferTargets: z.array(z.string()).optional(),
       tests: z.array(z.object({ question: z.string(), expected: z.string().optional() })).optional()
@@ -185,6 +185,22 @@ export async function handleAssistantMcp(req, res, { store, config, limiter, con
       } finally { slot.release(); }
     }
     return text({ total: site.tests.length, offset, results });
+  }));
+
+  mcp.registerTool('list_versions', {
+    description: 'Version tags of the GitHub assistants repo (ssnanda/ajmcp-assistants), newest first, with their commit and link.',
+    inputSchema: z.object({})
+  }, guard(async () => {
+    if (!github || !github.configured) return fail('github_not_configured');
+    return text(await github.listTags());
+  }));
+
+  mcp.registerTool('tag_version', {
+    description: 'Tag the current state of the GitHub assistants repo (every assistant) as a version, e.g. after finishing a set of edits. Pending changes are committed first. Name: letters, numbers, dots, dashes, slashes (e.g. v2026-11-20 or ncllcagents-v3); note: what changed.',
+    inputSchema: z.object({ name: z.string().min(1).max(100), note: z.string().max(2000).optional() })
+  }, writeOnly(async ({ name, note }) => {
+    if (!github || !github.configured) return fail('github_not_configured');
+    return text(await github.createTag(name, note));
   }));
 
   const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: undefined });

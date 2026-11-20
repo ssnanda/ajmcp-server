@@ -53,6 +53,8 @@ record the route as `/assistants/mcp`, never the token.
 | `import_assistant` | read (preview), write (apply) | Loads package files. Fields change only when their file is present. Knowledge files replace all manual knowledge; website-synced documents are kept. `apply: false` shows the changes and limit problems; `apply: true` saves in one write, or changes nothing if any check fails. |
 | `update_assistant` | write | `systemPrompt`, `routeLabel`, `leadCapture`, `leadInstructions`, `fallback`, `strict`, `transferTargets`, `tests` |
 | `add_knowledge`, `update_knowledge`, `delete_knowledge` | write | Manual documents only |
+| `list_versions` | read | Version tags of the assistants repo, newest first |
+| `tag_version` | write | Tags the repo's current state (every assistant) as a version; commits pending changes first |
 | `run_tests` | read | Asks the live AI the saved tests (10 per call, use `offset` for more) or one custom question; returns reply and expected result side by side |
 
 **Never exposed:** provider keys, CLI logins, website tokens, the admin password. Packages never set
@@ -89,6 +91,11 @@ in the admin and shown once.
 - A folder that fails validation is rejected and listed, and the assistant is left as it was.
 - Folders without a matching assistant are reported, never created.
 - **Pull all** imports every folder that differs.
+
+**Versions.** Settings › GitHub sync › Versions, or the `tag_version` MCP tool, creates an annotated
+tag on the branch head with a note.
+- Changes still waiting to be committed are pushed first.
+- The same token is enough: *Contents: read & write* covers tags.
 
 **Chat transcripts** are optional and **off** by default, because they are customer data.
 - **Where:** one Markdown file per conversation at `chats/<YYYY-MM-DD>/<assistant>-<channel>-<session>.md`.

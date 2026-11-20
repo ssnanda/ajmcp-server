@@ -187,6 +187,40 @@ export class GitHubSync {
     throw new Error('github_push_conflict');
   }
 
+  /** Recent version tags, newest first: [{ name, commit, url }]. */
+  async listTags() {
+    if (!this.configured) throw new Error('github_not_configured');
+    const tags = await this.api('GET', '/tags?per_page=50');
+    return (tags || []).map((t) => ({ name: t.name, commit: String(t.commit?.sha || '').slice(0, 7), url: `https://github.com/${this.settings.repo}/tree/${encodeURIComponent(t.name)}` }));
+  }
+
+  /**
+   * Tags the current head of the branch as a version (annotated tag with a message). Any assistant changes still
+   * waiting for their debounced commit are pushed first, so the tag includes them.
+   */
+  async createTag(name, message = '') {
+    if (!this.configured) throw new Error('github_not_configured');
+    const tag = String(name || '').trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]{0,99}$/.test(tag) || tag.includes('..') || tag.endsWith('.lock') || tag.endsWith('/')) throw new Error('invalid_tag_name');
+    if (this.pending.size) {
+      clearTimeout(this.timer);
+      const batch = new Map(this.pending);
+      this.pending.clear();
+      await this.push([...batch.keys()], 'before tag');
+    }
+    const snap = await this.snapshot();
+    if (!snap) throw new Error('github_repo_empty');
+    const note = String(message || '').trim().slice(0, 2000) || `Version ${tag}`;
+    const object = await this.api('POST', '/git/tags', { tag, message: note, object: snap.commitSha, type: 'commit' });
+    try {
+      await this.api('POST', '/git/refs', { ref: `refs/tags/${tag}`, sha: object.sha });
+    } catch (error) {
+      if (error.status === 422) throw new Error('tag_exists');
+      throw error;
+    }
+    return { name: tag, commit: snap.commitSha.slice(0, 7), url: `https://github.com/${this.settings.repo}/tree/${encodeURIComponent(tag)}` };
+  }
+
   /** Import the given folders from GitHub (all folders when ids is empty). Only differing folders are applied. */
   async pull(ids = []) {
     if (!this.configured) throw new Error('github_not_configured');
@@ -253,7 +287,7 @@ export class GitHubSync {
   }
 }
 
-const EDITABLE = ['systemPrompt', 'routeLabel', 'leadCapture', 'leadInstructions', 'fallback', 'strict', 'transferTargets', 'tests'];
+const EDITABLE = ['name', 'systemPrompt', 'routeLabel', 'leadCapture', 'leadInstructions', 'fallback', 'strict', 'transferTargets', 'tests'];
 function pickFields(fields) { return Object.fromEntries(EDITABLE.filter((k) => fields[k] !== undefined).map((k) => [k, fields[k]])); }
 
 export const newWebhookSecret = () => randomBytes(24).toString('hex');
