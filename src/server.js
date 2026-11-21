@@ -3,7 +3,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { identityForBearer, authorizeSite } from './auth.js';
 import { Limiter } from './limits.js';
 import { InputError } from './provider.js';
-import { applyMaster, describeModel } from './master.js';
+import { describeModel } from './master.js';
 import { runChat } from './chat.js';
 import { routeChat, ConversationStore, KEY_RE } from './routing.js';
 import { LeadLimiter } from './leads.js';
@@ -183,13 +183,22 @@ export function createAjmcpServer(config, { fetchFn = fetch, agentRunner = runAg
         status = res.statusCode; return;
       }
       if (req.method === 'GET' && path === '/v1/capabilities') {
+        const effective = identity.kind === 'site' ? describeModel(identity.site, config) : null;
         status = 200;
         return json(res, status, {
           version: APP_VERSION, id: identity.id,
-          kind: identity.kind, provider: identity.kind === 'site' ? applyMaster(identity.site, config).provider : null,
+          kind: identity.kind, provider: effective?.provider || null, model: effective?.model || null,
           endpoints: ['/v1/chat', '/v1/ajcore/reply', '/v1/assistant', '/mcp'],
           agentsEnabled: identity.kind === 'admin' && config.enableAgentJobs
         }, id);
+      }
+      // A named integration token may revoke itself during Disconnect. Primary site tokens remain admin-managed.
+      if (req.method === 'DELETE' && path === '/v1/access-token') {
+        const site = authorizeSite(identity);
+        if (!site) { status = 403; return json(res, status, { error: 'site_token_required' }, id); }
+        if (!identity.tokenId) { status = 403; return json(res, status, { error: 'named_token_required' }, id); }
+        store.removeToken(site.id, identity.tokenId);
+        status = 200; return json(res, status, { ok: true }, id);
       }
       if (req.method === 'GET' && path === '/v1/admin/tools') {
         if (identity.kind !== 'admin') { status = 403; return json(res, status, { error: 'admin_required' }, id); }

@@ -26,7 +26,11 @@ export function identityForBearer(header, config) {
     let which = -1;
     hashes.forEach((expected, index) => { if (expected.length === candidateHash.length && timingSafeEqual(candidateHash, expected)) { hit = true; which = index; } });
     // `via` says which of the site's tokens was used (for the admin activity list); never the token itself.
-    if (hit && !site.disabled) matched = { kind: 'site', id: site.id, site, via: which <= 0 ? 'primary' : String(site.tokens[which - 1]?.label || 'token').slice(0, 40) };
+    if (hit && !site.disabled) matched = {
+      kind: 'site', id: site.id, site,
+      via: which <= 0 ? 'primary' : String(site.tokens[which - 1]?.label || 'token').slice(0, 40),
+      tokenId: which <= 0 ? null : String(site.tokens[which - 1]?.id || '')
+    };
   }
   return matched;
 }

@@ -10,7 +10,8 @@ Tokens belong to exactly one **site** or the **admin**. WordPress must store its
 
 ## Website APIs (site token)
 
-- `GET /v1/capabilities` — show authenticated tenant ID and provider
+- `GET /v1/capabilities` — show authenticated tenant ID plus the effective provider and model (including the master switch)
+- `DELETE /v1/access-token` — let a named integration token revoke itself during disconnect; primary site tokens remain admin-managed
 - `POST /v1/chat` — body `{ "messages": [{ "role":"user", "content":"What are your hours?" }] }`; response includes `{ "reply", "site", "provider", "model", "usage", "requestId" }`
 - `POST /v1/ajcore/reply` — body `{ "sessionId": 123, "message":"Hello", "history":[{"role":"assistant","content":"Welcome"}] }`; response includes `{ "sessionId", "reply", "senderName":"AJMCP AI", "site" }`. **The WordPress connector must deliver the reply through AJCore's existing automated-reply endpoint; this API does not post to AJCore itself.**
 - `POST /mcp` — MCP 2026 protocol Streamable HTTP (stateless). Tools: `site_info` and `ask_site_ai`. Authenticate with the same per-site bearer token. Clients requiring full OAuth discovery/authorization are not supported yet.

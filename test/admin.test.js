@@ -178,6 +178,9 @@ test('named access tokens: AJOps gets its own, replacing keeps one per label, re
   const second = await call('/admin/api/sites/ncllcagents/tokens', 'POST', { label: 'AJOps', replace: true });
   assert.equal((await chat(second.data.token)).status, 200);
   assert.equal((await chat(first.data.token)).status, 401, 'the replaced token no longer works');
+  const capabilities = await fetch(url + '/v1/capabilities', { headers: { authorization: `Bearer ${second.data.token}` } });
+  assert.equal(capabilities.status, 200);
+  assert.deepEqual(await capabilities.json().then(({ provider, model }) => ({ provider, model })), { provider: 'openai', model: 'm' });
   const listed = (await call('/admin/api/state')).data.sites[0].tokens;
   assert.deepEqual(listed.map((x) => x.label), ['AJOps']);
   assert.equal(JSON.stringify(listed).includes(second.data.token), false, 'tokens are never listed in full');
@@ -189,6 +192,12 @@ test('named access tokens: AJOps gets its own, replacing keeps one per label, re
   assert.equal(revoked.res.status, 200);
   assert.equal((await chat(second.data.token)).status, 401, 'a revoked token stops working immediately');
   assert.equal((await chat(primary)).status, 200);
+
+  const selfToken = await call('/admin/api/sites/ncllcagents/tokens', 'POST', { label: 'Self disconnect' });
+  const selfRevoke = await fetch(url + '/v1/access-token', { method: 'DELETE', headers: { authorization: `Bearer ${selfToken.data.token}` } });
+  assert.equal(selfRevoke.status, 200);
+  assert.equal((await chat(selfToken.data.token)).status, 401, 'a named token can revoke itself');
+  assert.equal((await fetch(url + '/v1/access-token', { method: 'DELETE', headers: { authorization: `Bearer ${primary}` } })).status, 403, 'the primary token stays admin-managed');
 
   // Disabling the site turns every token off; extra tokens are stored only as hashes.
   const third = await call('/admin/api/sites/ncllcagents/tokens', 'POST', { label: 'Test' });
