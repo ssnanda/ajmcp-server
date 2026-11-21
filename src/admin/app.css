@@ -70,10 +70,15 @@ button:disabled { opacity: .5; cursor: default; }
 .stack { display: grid; gap: 12px; }
 .model-list { display: flex; flex-wrap: wrap; gap: 8px; }
 .model-chip { padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.roadmap ol { margin: 0; padding-left: 24px; }
+.roadmap li { padding: 5px 0; }
+.roadmap li.done span { color: var(--muted); text-decoration: line-through; }
+.roadmap .actions input { flex: 1 1 320px; }
 
 /* sites */
 .site { border: 1px solid var(--line); border-left: 4px solid var(--tone, var(--blue)); border-radius: 10px; margin-bottom: 10px; background: var(--card); }
 .site.anthropic { --tone: var(--orange); } .site.openai { --tone: var(--green); }
+.site.nvidia { --tone: var(--green); }
 .site.claude-cli { --tone: var(--violet); } .site.codex-cli { --tone: var(--teal); }
 .site.off { opacity: .75; }
 .site > summary { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; padding: 10px 12px; cursor: pointer; }
@@ -92,6 +97,7 @@ details.add > div { padding: 0 12px 12px; }
 .pill.bad { color: var(--red); border-color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
 .pill.tone-anthropic { color: var(--orange); border-color: var(--orange); }
 .pill.tone-openai { color: var(--green); border-color: var(--green); }
+.pill.tone-nvidia { color: var(--green); border-color: var(--green); }
 .pill.tone-claude-cli { color: var(--violet); border-color: var(--violet); }
 .pill.tone-codex-cli { color: var(--teal); border-color: var(--teal); }
 .pill.tone-antigravity-cli { color: var(--blue, #4285f4); border-color: var(--blue, #4285f4); }
@@ -153,7 +159,7 @@ label.check input { width: auto; min-height: 0; }
 .tparent .tname { flex: 1; overflow-wrap: anywhere; }
 .caret { width: 12px; color: var(--muted); font-size: 11px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
-.dot.tone-anthropic { background: var(--orange); } .dot.tone-openai { background: var(--green); }
+.dot.tone-anthropic { background: var(--orange); } .dot.tone-openai, .dot.tone-nvidia { background: var(--green); }
 .dot.tone-claude-cli { background: var(--violet); } .dot.tone-codex-cli { background: var(--teal); }
 .dot.tone-ollama { background: var(--teal); }
 .dot.off { opacity: .35; }

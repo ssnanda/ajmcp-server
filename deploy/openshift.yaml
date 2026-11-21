@@ -38,6 +38,9 @@ spec:
             - name: ANTHROPIC_API_KEY
               valueFrom:
                 secretKeyRef: { name: ajmcp-secrets, key: anthropic-api-key }
+            - name: NVIDIA_NIM_API_KEY
+              valueFrom:
+                secretKeyRef: { name: ajmcp-secrets, key: nvidia-nim-api-key, optional: true }
             - name: ADMIN_TOKEN
               valueFrom:
                 secretKeyRef: { name: ajmcp-secrets, key: admin-token }

@@ -78,6 +78,15 @@ export async function listOllamaModels(config, fetchFn = fetch) {
   return data.models.map((item) => String(item?.name || item?.model || '')).filter(Boolean).sort();
 }
 
+export async function listNvidiaModels(config, fetchFn = fetch) {
+  if (!config.nvidiaApiKey) throw new ProviderError('provider_not_configured', 503);
+  const data = await fetchModel(fetchFn, 'https://integrate.api.nvidia.com/v1/models', {
+    method: 'GET', headers: { Authorization: `Bearer ${config.nvidiaApiKey}`, Accept: 'application/json' }
+  }, config.providerTimeoutMs);
+  if (!Array.isArray(data?.data)) throw new ProviderError('provider_invalid_response');
+  return data.data.map((item) => String(item?.id || '')).filter(Boolean).sort();
+}
+
 export async function generateReply(site, messages, config, fetchFn = fetch) {
   const validated = validateMessages(messages, config);
   site = applyMaster(site, config); // the master switch (when on) decides the provider and model for every call
@@ -92,7 +101,7 @@ export async function generateReply(site, messages, config, fetchFn = fetch) {
       throw error;
     }
   }
-  const model = site.model || (provider === 'openai' ? config.openaiModel : provider === 'ollama' ? config.ollamaModel : config.anthropicModel);
+  const model = site.model || (provider === 'openai' ? config.openaiModel : provider === 'nvidia' ? config.nvidiaModel : provider === 'ollama' ? config.ollamaModel : config.anthropicModel);
   if (!model || /^SET_SUPPORTED/.test(model)) throw new ProviderError('model_not_configured', 503);
 
   if (provider === 'openai') {
@@ -119,6 +128,17 @@ export async function generateReply(site, messages, config, fetchFn = fetch) {
       }, body: JSON.stringify(body)
     }, timeoutMs(config, provider, model, config.providerTimeoutMs));
     const text = (data?.content || []).filter(x => x.type === 'text').map(x => x.text).join('\n').trim();
+    if (!text) throw new ProviderError('provider_empty_reply');
+    return { text, provider, model, usage: data.usage || null };
+  }
+  if (provider === 'nvidia') {
+    if (!config.nvidiaApiKey) throw new ProviderError('provider_not_configured', 503);
+    const history = site.systemPrompt ? [{ role: 'system', content: site.systemPrompt }, ...validated] : validated;
+    const data = await fetchModel(fetchFn, 'https://integrate.api.nvidia.com/v1/chat/completions', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Bearer ${config.nvidiaApiKey}` },
+      body: JSON.stringify({ model, messages: history, max_tokens: site.assistant ? 8000 : 1024, stream: false })
+    }, timeoutMs(config, provider, model, config.providerTimeoutMs));
+    const text = typeof data?.choices?.[0]?.message?.content === 'string' ? data.choices[0].message.content.trim() : '';
     if (!text) throw new ProviderError('provider_empty_reply');
     return { text, provider, model, usage: data.usage || null };
   }

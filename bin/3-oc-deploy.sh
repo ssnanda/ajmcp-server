@@ -167,6 +167,7 @@ if [[ "$SYNC_SECRETS" == true ]] || ! oc get secret ajmcp-secrets -n "$PROJECT" 
   SITE_FILE="${AJMCP_SITES_FILE:-sites.json}"
   OPENAI_API_KEY="${OPENAI_API_KEY:-}"
   ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+  NVIDIA_NIM_API_KEY="${NVIDIA_NIM_API_KEY:-}"
   if [[ -f "$SITE_FILE" ]]; then cp "$SITE_FILE" "$TMP/sites.json"; else echo '{"sites":[]}' > "$TMP/sites.json"; fi
   node - "$TMP/sites.json" <<'NODE'
 const fs = require('fs');
@@ -178,7 +179,7 @@ for (const site of config.sites) {
   if (typeof site.token !== 'string' || site.token.length < 32 || /REPLACE_WITH|EXAMPLE|SAMPLE/i.test(site.token)) throw new Error('Site '+site.id+' needs real 32+ character token');
   if (tokens.has(site.token)) throw new Error('Duplicate site token');
   tokens.add(site.token);
-  if (!['openai','anthropic'].includes(site.provider || 'openai')) throw new Error('Invalid site provider');
+  if (!['openai','anthropic','nvidia','ollama','claude-cli','codex-cli','antigravity-cli','copilot-cli'].includes(site.provider || 'openai')) throw new Error('Invalid site provider');
 }
 NODE
   ADMIN_TOKEN="${ADMIN_TOKEN:-}"
@@ -192,6 +193,7 @@ NODE
   [[ ${#ADMIN_TOKEN} -ge 32 ]] || { echo "ERROR: Admin token too short" >&2; exit 1; }
   printf %s "$OPENAI_API_KEY" > "$TMP/openai-api-key"
   printf %s "$ANTHROPIC_API_KEY" > "$TMP/anthropic-api-key"
+  printf %s "$NVIDIA_NIM_API_KEY" > "$TMP/nvidia-nim-api-key"
   printf %s "$ADMIN_TOKEN" > "$TMP/admin-token"
   chmod 600 "$TMP"/*
   # --sync-secrets must keep the existing web admin login: carry its Secret fields over.
@@ -203,6 +205,7 @@ NODE
   oc create secret generic ajmcp-secrets -n "$PROJECT" \
     --from-file="openai-api-key=$TMP/openai-api-key" \
     --from-file="anthropic-api-key=$TMP/anthropic-api-key" \
+    --from-file="nvidia-nim-api-key=$TMP/nvidia-nim-api-key" \
     --from-file="admin-token=$TMP/admin-token" \
     --from-file="sites.json=$TMP/sites.json" \
     ${EXTRA[@]+"${EXTRA[@]}"} \

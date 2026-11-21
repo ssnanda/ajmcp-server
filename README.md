@@ -17,12 +17,14 @@ A single-container, OpenShift-ready, multi-tenant AI gateway and standards-based
 
 1. `npm install`.
 2. Generate two separate random tokens (admin and site), and edit a private copy of `examples/sites.example.json` with real tokens and a model ID your provider account supports.
-3. Set `SITES_CONFIG_FILE=/absolute/path/sites.json`, `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`, `ALLOWED_HOSTS=localhost,127.0.0.1` and `HOST=127.0.0.1`.
+3. Set `SITES_CONFIG_FILE=/absolute/path/sites.json`, one or more of `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `NVIDIA_NIM_API_KEY`, `ALLOWED_HOSTS=localhost,127.0.0.1` and `HOST=127.0.0.1`.
 4. `npm start`.
 5. Call `/health/ready`; invoke `/v1/chat` using `Authorization: Bearer SITE_TOKEN` from a backend, never browser JavaScript.
 6. Run `npm test` and `npm run check`.
 
 The `examples/sites.example.json` deliberately contains nonfunctional placeholder tokens/models. The server refuses to start with placeholder credentials.
+
+NVIDIA NIM is provider `nvidia`. The admin can save its API key, discover hosted models, select one per assistant, or route all assistants through NVIDIA with the master switch. Hosted calls use NVIDIA's fixed OpenAI-compatible endpoint. Settings → Roadmap provides a persistent operator checklist; FCC review items are documented in `docs/ROADMAP.md`.
 
 ## Build one image with independently pinned CLIs
 

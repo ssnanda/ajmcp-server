@@ -1,11 +1,11 @@
 // Master AI switch: one setting that routes every model call (site chat, assistants, leads, MCP, agent jobs) through
 // one subscription tool, whatever each site is set to. Off = every site uses its own provider and model.
 // The sites are not changed: switching back restores each site's own choice at once.
-export const MASTER_PROVIDERS = Object.freeze(['claude', 'codex', 'antigravity', 'copilot', 'ollama']);
-export const MASTER_LABELS = Object.freeze({ claude: 'Claude', codex: 'Codex (ChatGPT)', antigravity: 'Google Antigravity', copilot: 'GitHub Copilot', ollama: 'Ollama' });
-const PROVIDER_OF = Object.freeze({ claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli', copilot: 'copilot-cli', ollama: 'ollama' });
+export const MASTER_PROVIDERS = Object.freeze(['claude', 'codex', 'antigravity', 'copilot', 'nvidia', 'ollama']);
+export const MASTER_LABELS = Object.freeze({ claude: 'Claude', codex: 'Codex (ChatGPT)', antigravity: 'Google Antigravity', copilot: 'GitHub Copilot', nvidia: 'NVIDIA NIM', ollama: 'Ollama' });
+const PROVIDER_OF = Object.freeze({ claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli', copilot: 'copilot-cli', nvidia: 'nvidia', ollama: 'ollama' });
 
-export const emptyMaster = () => ({ provider: '', models: { claude: '', codex: '', antigravity: '', copilot: '', ollama: '' } });
+export const emptyMaster = () => ({ provider: '', models: { claude: '', codex: '', antigravity: '', copilot: '', nvidia: '', ollama: '' } });
 
 /** The master setting from config (never undefined). */
 export function masterOf(config) {
@@ -38,6 +38,6 @@ export function timeoutMs(config, provider, model, fallbackMs) {
 /** Provider and model a call will use (master switch applied; the provider's configured default when none is set), for the activity log. */
 export function describeModel(site, config) {
   const s = applyMaster(site, config);
-  const dflt = s.provider === 'openai' ? config.openaiModel : s.provider === 'ollama' ? config.ollamaModel : s.provider === 'anthropic' ? config.anthropicModel : '';
+  const dflt = s.provider === 'openai' ? config.openaiModel : s.provider === 'nvidia' ? config.nvidiaModel : s.provider === 'ollama' ? config.ollamaModel : s.provider === 'anthropic' ? config.anthropicModel : '';
   return { provider: s.provider, model: s.model || dflt || 'default' };
 }

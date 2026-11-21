@@ -6,7 +6,7 @@ import { hashPassword, verifyPassword } from './password.js';
 import { StoreError, KEY_PROVIDERS } from './store.js';
 import { CliError, cliStatus, cliModels, isCliProvider, runCli, saveCodexAuth, saveAgyAuth } from './cli.js';
 import { masterOf, applyMaster, MASTER_LABELS } from './master.js';
-import { generateReply, listOllamaModels, ProviderError, InputError } from './provider.js';
+import { generateReply, listNvidiaModels, listOllamaModels, ProviderError, InputError } from './provider.js';
 import { APP_VERSION } from './version.js';
 import { knowledgeChars } from './knowledge.js';
 import { saveOllamaSecret } from './openshift.js';
@@ -186,7 +186,8 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
     user: config.adminUser,
     storage: store.enabled,
     sites: store.sites().map(siteView),
-    keys: { openai: store.keyInfo('openai'), anthropic: store.keyInfo('anthropic') },
+    keys: { openai: store.keyInfo('openai'), anthropic: store.keyInfo('anthropic'), nvidia: store.keyInfo('nvidia') },
+    roadmap: store.roadmap(),
     master: masterView(),
     timeouts: { ...(config.timeouts || {}) },
     ollama: {
@@ -223,6 +224,7 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
   async function listModels(provider) {
     if (isCliProvider(provider)) return cliModels(config, provider);
     if (provider === 'ollama') return listOllamaModels(config, fetchFn);
+    if (provider === 'nvidia') return listNvidiaModels(config, fetchFn);
     if (!KEY_PROVIDERS.includes(provider)) throw new AdminError('invalid_provider');
     const key = provider === 'openai' ? config.openaiApiKey : config.anthropicApiKey;
     if (!key) throw new AdminError('provider_not_configured', 409);
@@ -384,6 +386,9 @@ export function createAdmin({ config, store, stats, activity, fetchFn = fetch, r
     if (method === 'PUT' && path === '/admin/api/timeouts') {
       store.setTimeouts(body.timeouts);
       return send(res, 200, { ...(config.timeouts || {}) });
+    }
+    if (method === 'PUT' && path === '/admin/api/roadmap') {
+      return send(res, 200, { roadmap: store.setRoadmap(body.roadmap) });
     }
     if (method === 'PUT' && path === '/admin/api/keys') {
       for (const provider of KEY_PROVIDERS) {

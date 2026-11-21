@@ -4,12 +4,12 @@ let state = null;
 let cli = null;             // installed CLI versions + login state
 let freebuff = null;        // interactive-only CLI status
 let toolVersions = null;    // pinned / installed / npm latest
-const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['ollama', 'Remote Ollama'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)'], ['antigravity-cli', 'Google Antigravity (CLI)'], ['copilot-cli', 'GitHub Copilot (CLI)']];
-const MASTER_CHOICES = [['', 'Per assistant'], ['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Antigravity'], ['copilot', 'Copilot'], ['ollama', 'Ollama']];
-const MASTER_PROVIDER = { claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli', copilot: 'copilot-cli', ollama: 'ollama' };
+const PROVIDERS = [['anthropic', 'Anthropic API'], ['openai', 'OpenAI API'], ['nvidia', 'NVIDIA NIM'], ['ollama', 'Remote Ollama'], ['claude-cli', 'Claude subscription (CLI)'], ['codex-cli', 'ChatGPT subscription (Codex CLI)'], ['antigravity-cli', 'Google Antigravity (CLI)'], ['copilot-cli', 'GitHub Copilot (CLI)']];
+const MASTER_CHOICES = [['', 'Per assistant'], ['claude', 'Claude'], ['codex', 'Codex'], ['antigravity', 'Antigravity'], ['copilot', 'Copilot'], ['nvidia', 'NVIDIA'], ['ollama', 'Ollama']];
+const MASTER_PROVIDER = { claude: 'claude-cli', codex: 'codex-cli', antigravity: 'antigravity-cli', copilot: 'copilot-cli', nvidia: 'nvidia', ollama: 'ollama' };
 const isCli = (p) => p.endsWith('-cli');
 // Views: the dashboard plus focused Settings pages.
-const VIEWS = ['dashboard', 'providers', 'connections', 'github', 'account'];
+const VIEWS = ['dashboard', 'providers', 'connections', 'github', 'roadmap', 'account'];
 const fromHash = () => { const k = location.hash.slice(1); return k === 'logins' ? 'providers' : VIEWS.includes(k) ? k : 'dashboard'; };
 let view = fromHash();
 function go(v) {
@@ -87,7 +87,7 @@ function renderLogin(message) {
 
 /* ---------- sites ---------- */
 async function loadModels(provider, datalist) {
-  if (!isCli(provider) && provider !== 'ollama' && !state.keys[provider].set) { datalist.replaceChildren(); return; }
+  if (!isCli(provider) && provider !== 'ollama' && !state.keys[provider]?.set) { datalist.replaceChildren(); return; }
   if (!models[provider] || !models[provider].length) {
     try { models[provider] = (await api('/models?provider=' + provider)).models; } catch { models[provider] = []; }
   }
@@ -493,8 +493,8 @@ function masterBar() {
   const kids = [h('div', { class: 'mhead' }, h('strong', null, 'AI master switch'), seg)];
   if (m.provider) {
     const providerKey = MASTER_PROVIDER[m.provider];
-    const ready = m.provider === 'ollama' ? state.ollama && state.ollama.tunnelConnected : cli && cli[m.provider] && cli[m.provider].loggedIn;
-    const readyText = ready ? 'Ready' : (m.provider === 'ollama' ? 'Disconnected' : 'Login needed');
+    const ready = m.provider === 'ollama' ? state.ollama && state.ollama.tunnelConnected : m.provider === 'nvidia' ? state.keys.nvidia.set : cli && cli[m.provider] && cli[m.provider].loggedIn;
+    const readyText = ready ? 'Ready' : (m.provider === 'ollama' ? 'Disconnected' : m.provider === 'nvidia' ? 'API key needed' : 'Login needed');
     const pick = h('input', { list: 'mmodels', placeholder: 'Model (blank = default)', value: m.models[m.provider] || '' });
     const list = h('datalist', { id: 'mmodels' });
     if (models[providerKey]) models[providerKey].forEach((id) => list.append(h('option', { value: id })));
@@ -515,7 +515,7 @@ function quickStatus() {
   const total = state.sites.reduce((n, x) => n + x.stats.requests, 0);
   const errors = state.sites.reduce((n, x) => n + x.stats.errors, 0);
   const active = state.sites.filter((x) => !x.disabled).length;
-  const keys = ['anthropic', 'openai'].filter((p) => state.keys[p].set).length;
+  const keys = ['anthropic', 'openai', 'nvidia'].filter((p) => state.keys[p].set).length;
   const button = (label, value, ready, action, title) => h('button', { type: 'button', class: 'quick' + (ready === false ? ' warn' : ''), onclick: action, title },
     ready == null ? null : h('span', { class: 'qdot ' + (ready ? 'ok' : 'no') }),
     h('span', { class: 'qlabel' }, label), value == null ? null : h('strong', null, value));
@@ -529,7 +529,7 @@ function quickStatus() {
     provider('Google', 'google', cli && cli.antigravity),
     provider('Copilot', 'copilot', cli && cli.copilot),
     provider('Freebuff', 'freebuff', freebuff && { loggedIn: freebuff.loggedIn }),
-    button('API keys', `${keys}/2`, keys === 2, () => { vendor = 'openai'; go('providers'); }));
+    button('API keys', `${keys}/3`, keys === 3, () => { vendor = 'openai'; go('providers'); }));
 }
 
 function sitesTab() {
@@ -542,7 +542,7 @@ function sitesTab() {
     h('button', { type: 'button', class: 'tadd' + (view === 'dashboard' && sel.add ? ' on' : ''), onclick: () => { sel = { id: sel.id, section: sel.section, add: true }; go('dashboard'); } }, '+ Add assistant'),
     ...state.sites.map(treeNode),
     state.sites.length ? null : h('div', { class: 'empty' }, 'No assistants yet.'));
-  const panel = view === 'providers' ? providersView() : view === 'connections' ? connectionsView() : view === 'github' ? githubView() : view === 'account' ? accountView() : sel.add ? [h('h2', null, 'Add assistant'), ...addPanel()]
+  const panel = view === 'providers' ? providersView() : view === 'connections' ? connectionsView() : view === 'github' ? githubView() : view === 'roadmap' ? roadmapView() : view === 'account' ? accountView() : sel.add ? [h('h2', null, 'Add assistant'), ...addPanel()]
     : [h('h2', null, h('span', { class: 'grow' }, `${site.id} · ${(SECTIONS.find(([k]) => k === sel.section) || [0, ''])[1]}`),
         h('span', { class: 'pill ' + (site.disabled ? 'off' : 'on') }, site.disabled ? 'disabled' : 'active'),
         h('span', { class: 'pill tone-' + site.provider }, providerLabel(site.provider))),
@@ -581,7 +581,7 @@ function timeoutsPanel() {
 }
 
 /* ---------- AI Providers: one entry per vendor; its subscription login, API key or connection on the right ---------- */
-const VENDORS = [['openai', 'ChatGPT', 'OpenAI'], ['anthropic', 'Claude', 'Anthropic'], ['google', 'Google', 'Antigravity'], ['freebuff', 'Freebuff', 'Interactive CLI'], ['ollama', 'Ollama', 'Self-hosted'], ['copilot', 'GitHub Copilot', 'GitHub']];
+const VENDORS = [['openai', 'ChatGPT', 'OpenAI'], ['anthropic', 'Claude', 'Anthropic'], ['nvidia', 'NVIDIA NIM', 'NVIDIA'], ['google', 'Google', 'Antigravity'], ['freebuff', 'Freebuff', 'Interactive CLI'], ['ollama', 'Ollama', 'Self-hosted'], ['copilot', 'GitHub Copilot', 'GitHub']];
 let vendor = 'openai';
 const cliTone = (i) => !i || !i.version ? 'bad' : i.loggedIn ? 'on' : 'off';
 
@@ -590,6 +590,7 @@ function vendorPills(key) {
   const apiKey = (p) => h('span', { class: 'pill ' + (state.keys[p].set ? 'on' : 'off') }, 'API key' + (state.keys[p].set ? ' ✓' : ' –'));
   if (key === 'openai') return [sub('codex', 'Subscription'), apiKey('openai')];
   if (key === 'anthropic') return [sub('claude', 'Subscription'), apiKey('anthropic')];
+  if (key === 'nvidia') return [apiKey('nvidia')];
   if (key === 'google') return [sub('antigravity', 'Subscription')];
   if (key === 'freebuff') return [h('span', { class: 'pill ' + (freebuff && freebuff.loggedIn ? 'on' : 'off') }, freebuff && freebuff.loggedIn ? 'Ready' : 'Login needed')];
   if (key === 'copilot') return [sub('copilot', 'Token')];
@@ -614,6 +615,7 @@ function vendorBody(key) {
       ['In Terminal on your Mac, run and sign in:', 'claude setup-token'],
       ['Paste the token it prints below, click Save login, then Test.']], 'claudeToken'),
     keyRow('anthropic', 'Anthropic API'))];
+  if (key === 'nvidia') return [h('div', { class: 'grid2' }, keyRow('nvidia', 'NVIDIA NIM API'))];
   if (key === 'google') return [h('div', { class: 'grid2' },
     cliRow('antigravity', 'Google Antigravity (agy)', [
       ['In Terminal on your Mac, log in to OpenShift:', 'oc login'],
@@ -947,6 +949,29 @@ function dashboard() {
     activityRail())];
 }
 
+function roadmapView() {
+  const items = state.roadmap || [];
+  const save = async (next, message) => {
+    const data = await api('/roadmap', 'PUT', { roadmap: next });
+    state.roadmap = data.roadmap;
+    notice = { kind: 'ok', text: message };
+    render();
+  };
+  const input = h('input', { maxlength: 300, placeholder: 'Add roadmap item' });
+  const rows = items.map((item) => {
+    const box = h('input', { type: 'checkbox', checked: item.done || null });
+    box.addEventListener('change', () => run(() => save(items.map((x) => x.id === item.id ? { ...x, done: box.checked } : x), 'Roadmap updated')));
+    return h('li', { class: item.done ? 'done' : null }, h('label', { class: 'check' }, box, h('span', null, item.text)));
+  });
+  return [h('h2', null, 'Roadmap'),
+    h('div', { class: 'sub roadmap' },
+      rows.length ? h('ol', null, ...rows) : h('div', { class: 'empty' }, 'No roadmap items.'),
+      h('div', { class: 'actions mt' }, input, h('button', { class: 'primary', type: 'button', onclick: () => {
+        const text = input.value.replace(/\s+/g, ' ').trim();
+        if (text) run(() => save([...items, { id: crypto.randomUUID().replace(/-/g, '').slice(0, 12), text, done: false }], 'Roadmap item added'));
+      } }, 'Add')))];
+}
+
 function accountView() {
   return [h('h2', null, 'Account'),
     h('div', { class: 'acct' },
@@ -1117,7 +1142,7 @@ function topbar() {
   menu.append(
     h('button', { type: 'button', 'aria-haspopup': 'menu', onclick: () => menu.classList.toggle('open') }, '⚙ Settings'),
     h('div', { class: 'drop' }, h('div', { class: 'drop-in', role: 'menu' },
-      item('dashboard', 'Dashboard'), item('providers', 'AI Providers'), item('connections', 'Connections'), item('github', 'GitHub sync'), h('hr'), item('account', 'Account'))));
+      item('dashboard', 'Dashboard'), item('providers', 'AI Providers'), item('connections', 'Connections'), item('github', 'GitHub sync'), item('roadmap', 'Roadmap'), h('hr'), item('account', 'Account'))));
   return h('header', { class: 'topbar' },
     h('h1', null, h('a', { href: location.pathname, title: 'Dashboard', onclick: (e) => { e.preventDefault(); sel.add = false; go('dashboard'); } }, 'AJMCP Admin')),
     h('span', { class: 'who' }, `v${state.version} · ${state.user}`),

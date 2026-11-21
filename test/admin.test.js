@@ -13,7 +13,7 @@ async function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'ajmcp-admin-'));
   const config = loadConfig({
     DATA_DIR: dir, ADMIN_USER: 'admin', ADMIN_PASSWORD_HASH: await hashPassword('correct horse battery'),
-    OPENAI_API_KEY: 'sk-env-openai-key-1234567890'
+    OPENAI_API_KEY: 'sk-env-openai-key-1234567890', NVIDIA_NIM_API_KEY: 'nvapi-env-key-1234567890'
   });
   const store = new SettingsStore(config);
   store.load();
@@ -62,6 +62,7 @@ test('admin requires login, then manages sites; tokens are hashed and work immed
   const state = (await call('/admin/api/state')).data;
   assert.equal(state.sites.length, 0);
   assert.equal(state.keys.openai.source, 'environment');
+  assert.equal(state.keys.nvidia.source, 'environment');
   assert.equal(JSON.stringify(state).includes('sk-env'), false);
 
   const created = await call('/admin/api/sites', 'POST', { id: 'blog', provider: 'openai', model: 'gpt-a', systemPrompt: 'hi' });
@@ -88,6 +89,7 @@ test('admin requires login, then manages sites; tokens are hashed and work immed
   assert.notEqual(rotated, token);
   assert.equal((await call('/admin/api/sites/blog/test', 'POST')).data.ok, true);
   assert.deepEqual((await call('/admin/api/models?provider=openai')).data.models, ['gpt-a', 'gpt-b']);
+  assert.deepEqual((await call('/admin/api/models?provider=nvidia')).data.models, ['gpt-a', 'gpt-b']);
 
   const doc = await call('/admin/api/sites/blog/knowledge', 'POST', { title: 'Hours', text: 'We are open 9 to 5.' });
   assert.equal(doc.res.status, 201);
@@ -113,6 +115,12 @@ test('keys are masked, password change works, cross-origin writes are refused', 
   assert.equal(keys.data.anthropic.hint, 'wxyz');
   assert.equal(JSON.stringify(keys.data).includes('sk-ant'), false);
   assert.equal(config.anthropicApiKey, 'sk-ant-abcdefghijklmnopqrstuvwxyz');
+  const nim = await call('/admin/api/keys', 'PUT', { nvidia: 'nvapi-abcdefghijklmnopqrstuvwxyz' });
+  assert.equal(nim.data.nvidia.hint, 'wxyz');
+  assert.equal(config.nvidiaApiKey, 'nvapi-abcdefghijklmnopqrstuvwxyz');
+
+  const roadmap = await call('/admin/api/roadmap', 'PUT', { roadmap: [{ id: 'abcdef123456', text: 'Review OAuth terms', done: true }] });
+  assert.deepEqual(roadmap.data.roadmap, [{ id: 'abcdef123456', text: 'Review OAuth terms', done: true }]);
 
   const evil = await call('/admin/api/sites', 'POST', { id: 'evil-site' }, { origin: 'https://evil.example' });
   assert.equal(evil.res.status, 403);

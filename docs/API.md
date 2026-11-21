@@ -18,6 +18,8 @@ Tokens belong to exactly one **site** or the **admin**. WordPress must store its
 
 The API uses the provider/model/system prompt configured for that site in `sites.json`. `history` is trusted only from the authenticated WordPress server, and it is validated as text-only user/assistant turns.
 
+Supported API providers are OpenAI (`openai`), Anthropic (`anthropic`), and NVIDIA NIM (`nvidia`). NVIDIA uses a fixed hosted endpoint and an admin- or environment-managed API key; callers cannot supply provider URLs or credentials.
+
 ## Admin-only APIs (separate admin token)
 
 - `GET /v1/admin/tools` — installed `codex` and `claude` CLI versions

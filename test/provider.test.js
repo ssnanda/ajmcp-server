@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateReply, listOllamaModels, validateMessages, ProviderError } from '../src/provider.js';
-const conf = { maxMessages: 20, maxMessageChars: 6000, providerTimeoutMs: 45000, openaiApiKey: 'openai-secret', anthropicApiKey: 'anthropic-secret', openaiModel: '', anthropicModel: '' };
+import { generateReply, listNvidiaModels, listOllamaModels, validateMessages, ProviderError } from '../src/provider.js';
+const conf = { maxMessages: 20, maxMessageChars: 6000, providerTimeoutMs: 45000, openaiApiKey: 'openai-secret', anthropicApiKey: 'anthropic-secret', nvidiaApiKey: 'nvapi-secret', openaiModel: '', anthropicModel: '', nvidiaModel: '' };
 const open = { id: 'one', provider: 'openai', model: 'gpt-test', systemPrompt: 'Approved facts only' };
 const claude = { id: 'two', provider: 'anthropic', model: 'claude-test', systemPrompt: 'Be concise' };
 const ollama = { id: 'three', provider: 'ollama', model: 'llama3.2:latest', systemPrompt: 'Stay local' };
+const nvidia = { id: 'four', provider: 'nvidia', model: 'nvidia/llama-test', systemPrompt: 'Use approved facts' };
 
 test('openai request uses configured model/prompt and extracts response text', async () => {
   let capture;
@@ -26,6 +27,29 @@ test('anthropic request uses site-specific provider and supported headers', asyn
     return { ok: true, json: async () => ({ content: [{ type: 'text', text: 'Hello Claude' }] }) };
   });
   assert.equal(result.text, 'Hello Claude');
+});
+
+test('NVIDIA NIM uses OpenAI-compatible chat completions and returns usage', async () => {
+  let capture;
+  const result = await generateReply(nvidia, [{ role: 'user', content: 'Hi' }], conf, async (url, options) => {
+    capture = { url, auth: options.headers.Authorization, body: JSON.parse(options.body) };
+    return { ok: true, json: async () => ({ choices: [{ message: { content: 'Hello from NIM' } }], usage: { total_tokens: 9 } }) };
+  });
+  assert.equal(capture.url, 'https://integrate.api.nvidia.com/v1/chat/completions');
+  assert.equal(capture.auth, 'Bearer nvapi-secret');
+  assert.deepEqual(capture.body.messages.map((m) => m.role), ['system', 'user']);
+  assert.equal(capture.body.model, 'nvidia/llama-test');
+  assert.equal(result.text, 'Hello from NIM');
+  assert.equal(result.usage.total_tokens, 9);
+});
+
+test('NVIDIA NIM model discovery is authenticated and sorted', async () => {
+  const models = await listNvidiaModels(conf, async (url, options) => {
+    assert.equal(url, 'https://integrate.api.nvidia.com/v1/models');
+    assert.equal(options.headers.Authorization, 'Bearer nvapi-secret');
+    return { ok: true, json: async () => ({ data: [{ id: 'z/model' }, { id: 'a/model' }] }) };
+  });
+  assert.deepEqual(models, ['a/model', 'z/model']);
 });
 
 test('input and provider errors do not leak provider response bodies', async () => {

@@ -12,7 +12,7 @@ export class StoreError extends Error {
 
 const ID_RE = /^[a-z0-9][a-z0-9-_]{1,63}$/;
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
-export const KEY_PROVIDERS = ['openai', 'anthropic'];
+export const KEY_PROVIDERS = ['openai', 'anthropic', 'nvidia'];
 export const PROVIDERS = [...KEY_PROVIDERS, 'ollama', 'claude-cli', 'codex-cli', 'antigravity-cli', 'copilot-cli'];
 
 // Saved test texts (question + what we expect), used by the admin "Tests" tab. Small on purpose: admin request bodies are capped.
@@ -109,6 +109,22 @@ function cleanTimeouts(raw) {
   return out;
 }
 
+function cleanRoadmap(raw) {
+  if (!Array.isArray(raw)) return [];
+  if (raw.length > 100) throw new StoreError('roadmap_full');
+  return raw.map((item) => ({
+    id: /^[a-f0-9]{12}$/.test(String(item?.id || '')) ? String(item.id) : randomBytes(6).toString('hex'),
+    text: String(item?.text || '').replace(/\s+/g, ' ').trim().slice(0, 300),
+    done: item?.done === true
+  })).filter((item) => item.text);
+}
+
+const DEFAULT_ROADMAP = Object.freeze([
+  { id: 'fcc1e6a10001', text: 'Obtain written vendor approval before using ChatGPT or Claude subscription OAuth as a server-side AJMCP provider.', done: false },
+  { id: 'fcc5ec0a0001', text: 'Design encrypted OAuth token storage, refresh rotation, revocation, audit logging, and per-admin consent.', done: false },
+  { id: 'fcca6a970001', text: 'Implement subscription OAuth adapters only after vendor approval and a security review.', done: false }
+]);
+
 // Normalizes a runtime site (seed file token or stored hash) to the persisted shape. Never keeps a plain token.
 function toStored(site) {
   return {
@@ -145,9 +161,9 @@ export class SettingsStore {
   constructor(config) {
     this.config = config;
     this.file = config.dataDir ? join(config.dataDir, 'settings.json') : '';
-    this.env = { openai: config.openaiApiKey, anthropic: config.anthropicApiKey, claude: config.claudeOauthToken, copilot: config.copilotToken, passwordHash: config.adminPasswordHash };
+    this.env = { openai: config.openaiApiKey, anthropic: config.anthropicApiKey, nvidia: config.nvidiaApiKey, claude: config.claudeOauthToken, copilot: config.copilotToken, passwordHash: config.adminPasswordHash };
     this.envMaster = { provider: config.master ? config.master.provider : '', models: { ...emptyMaster().models, ...(config.master ? config.master.models : {}) } };
-    this.state = { sites: undefined, keys: {}, passwordHash: '', passwordBase: '', master: undefined, timeouts: {}, connections: [], github: cleanGithub() };
+    this.state = { sites: undefined, keys: {}, passwordHash: '', passwordBase: '', master: undefined, timeouts: {}, connections: [], github: cleanGithub(), roadmap: cleanRoadmap(DEFAULT_ROADMAP) };
     this.onSitesChanged = null;   // (ids, reason) => void; set by the GitHub sync
   }
 
@@ -160,13 +176,14 @@ export class SettingsStore {
     const data = JSON.parse(raw);
     this.state = {
       sites: Array.isArray(data.sites) ? data.sites.map(toStored) : undefined,
-      keys: { openai: String(data.keys?.openai || ''), anthropic: String(data.keys?.anthropic || ''), claude: String(data.keys?.claude || ''), copilot: String(data.keys?.copilot || '') },
+      keys: { openai: String(data.keys?.openai || ''), anthropic: String(data.keys?.anthropic || ''), nvidia: String(data.keys?.nvidia || ''), claude: String(data.keys?.claude || ''), copilot: String(data.keys?.copilot || '') },
       passwordHash: String(data.passwordHash || ''),
       passwordBase: String(data.passwordBase || ''),
       master: data.master && typeof data.master === 'object' ? cleanMaster(data.master) : undefined,
       timeouts: cleanTimeouts(data.timeouts),
       connections: cleanConnections(data.connections),
-      github: cleanGithub(data.github)
+      github: cleanGithub(data.github),
+      roadmap: cleanRoadmap(data.roadmap ?? DEFAULT_ROADMAP)
     };
     this.apply();
   }
@@ -176,6 +193,7 @@ export class SettingsStore {
     if (state.sites) config.sites = state.sites;
     config.openaiApiKey = state.keys.openai || env.openai;
     config.anthropicApiKey = state.keys.anthropic || env.anthropic;
+    config.nvidiaApiKey = state.keys.nvidia || env.nvidia;
     config.claudeOauthToken = state.keys.claude || env.claude;
     config.copilotToken = state.keys.copilot || env.copilot;
     config.timeouts = state.timeouts || {};
@@ -189,7 +207,7 @@ export class SettingsStore {
     try {
       mkdirSync(this.config.dataDir, { recursive: true });
       const tmp = `${this.file}.${process.pid}.tmp`;
-      writeFileSync(tmp, JSON.stringify({ sites: next.sites, keys: next.keys, passwordHash: next.passwordHash, passwordBase: next.passwordBase, master: next.master, timeouts: next.timeouts, connections: next.connections || [], github: next.github || cleanGithub() }, null, 2) + '\n', { mode: 0o600 });
+      writeFileSync(tmp, JSON.stringify({ sites: next.sites, keys: next.keys, passwordHash: next.passwordHash, passwordBase: next.passwordBase, master: next.master, timeouts: next.timeouts, connections: next.connections || [], github: next.github || cleanGithub(), roadmap: next.roadmap || [] }, null, 2) + '\n', { mode: 0o600 });
       renameSync(tmp, this.file);
     } catch (error) {
       if (error instanceof StoreError) throw error;
@@ -476,6 +494,13 @@ export class SettingsStore {
   /** Time limits in seconds, keyed by model id or provider; {} clears them all. */
   setTimeouts(input) {
     this.write({ ...this.state, sites: this.state.sites ?? this.sites(), timeouts: cleanTimeouts(input) });
+  }
+
+  roadmap() { return cleanRoadmap(this.state.roadmap); }
+
+  setRoadmap(input) {
+    this.write({ ...this.state, sites: this.state.sites ?? this.sites(), roadmap: cleanRoadmap(input) });
+    return this.roadmap();
   }
 
   setPasswordHash(hash) {
